@@ -55,10 +55,13 @@ def main():
     ap.add_argument("--iters", type=int, default=30000)
     ap.add_argument("--half-res", action="store_true")
     ap.add_argument("--black-bkgd", action="store_true")
+    ap.add_argument("--bg", type=float, nargs=3, default=None, metavar=("R", "G", "B"),
+                    help="背景色 [0,1]。既定は白（--black-bkgd なら黒）")
     ap.add_argument("--sh-degree", type=int, default=3)
     # 初期化（合成データ用：立方体内のランダム点）
     ap.add_argument("--init-points", type=int, default=20000)
     ap.add_argument("--init-extent", type=float, default=2.0, help="初期点を置く立方体の半辺長")
+    ap.add_argument("--init-center", type=float, nargs=3, default=(0.0, 0.0, 0.0), metavar=("X", "Y", "Z"))
     # densification（既定値は公式実装と同じ。densify_until だけ既定で iters/2 にしている）
     ap.add_argument("--densify-from", type=int, default=500)
     ap.add_argument("--densify-until", type=int, default=None)
@@ -79,18 +82,18 @@ def main():
 
     torch.manual_seed(args.seed)
     dev = "cuda"
-    white = not args.black_bkgd
-    train_cams = load_cameras(args.datadir, "train", args.half_res, white, dev)
-    val_cams = load_cameras(args.datadir, "val", args.half_res, white, dev) or train_cams[:8]
-    test_cams = load_cameras(args.datadir, "test", args.half_res, white, dev)
-    bg = torch.tensor([1.0, 1.0, 1.0] if white else [0.0, 0.0, 0.0], device=dev)
+    bg_rgb = args.bg if args.bg else ([0.0] * 3 if args.black_bkgd else [1.0] * 3)
+    train_cams = load_cameras(args.datadir, "train", args.half_res, bg_rgb, dev)
+    test_cams = load_cameras(args.datadir, "test", args.half_res, bg_rgb, dev)
+    val_cams = load_cameras(args.datadir, "val", args.half_res, bg_rgb, dev) or test_cams or train_cams[:8]
+    bg = torch.tensor(bg_rgb, device=dev)
     extent = scene_extent(train_cams)
     densify_until = args.iters // 2 if args.densify_until is None else args.densify_until
     H, W = train_cams[0].H, train_cams[0].W
     print(f"train {len(train_cams)} 枚 ({W}x{H}), val {len(val_cams)} 枚, extent={extent:.2f}")
 
     model = GaussianModel(args.sh_degree)
-    model.init_random(args.init_points, args.init_extent, dev)
+    model.init_random(args.init_points, args.init_extent, dev, center=args.init_center)
     model.setup_optimizer(extent)
 
     logdir = Path("logs") / args.expname

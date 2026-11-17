@@ -16,6 +16,11 @@ def _window(size, sigma, device):
 
 def ssim(a, b, size=11, sigma=1.5):
     """(H,W,3) 同士の SSIM（11x11 ガウス窓、σ=1.5）"""
+    return ssim_map(a, b, size, sigma).mean()
+
+
+def ssim_map(a, b, size=11, sigma=1.5):
+    """画素ごとの SSIM (1,3,H,W)。評価でマスク内だけ平均したいとき用"""
     x, y = a.permute(2, 0, 1)[None], b.permute(2, 0, 1)[None]
     w = _window(size, sigma, a.device)
     conv = functools.partial(F.conv2d, weight=w, padding=size // 2, groups=3)
@@ -24,8 +29,7 @@ def ssim(a, b, size=11, sigma=1.5):
     syy = conv(y * y) - my * my
     sxy = conv(x * y) - mx * my
     c1, c2 = 0.01 ** 2, 0.03 ** 2
-    s = ((2 * mx * my + c1) * (2 * sxy + c2)) / ((mx * mx + my * my + c1) * (sxx + syy + c2))
-    return s.mean()
+    return ((2 * mx * my + c1) * (2 * sxy + c2)) / ((mx * mx + my * my + c1) * (sxx + syy + c2))
 
 
 def psnr(a, b):

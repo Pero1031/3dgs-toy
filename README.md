@@ -32,6 +32,7 @@ MLP を何百回も評価する代わりに、投影と並べ替えで済むの�
 | `render_video.py` | 学習済みガウシアンで物体の周りを一周する新規視点画像を描画し、描画速度を表示 |
 | `make_toy_dataset.py` | 動作確認用のおもちゃデータ（球 + 立方体。nerf-toy と同じ） |
 | `tests/test_rasterize.py` | ラスタライザの検算（素朴な全画素版と画像・勾配を突き合わせる、手書き逆伝播の gradcheck） |
+| `experiments/` | このリポジトリの実装を使った実験（下記） |
 
 ## アルゴリズムとコードの対応
 
@@ -115,7 +116,8 @@ SuperSplat などの 3DGS ビューアにドラッグ＆ドロップすれば中
 ## 主なオプション
 
 - `--iters` : 学習回数（公式は 30000。densification は既定で前半 `iters/2` まで）
-- `--init-points` / `--init-extent` : 初期点の数と、それを置く立方体の半辺長
+- `--init-points` / `--init-extent` / `--init-center` : 初期点の数、それを置く立方体の半辺長と中心
+- `--bg R G B` : 背景色（既定は白。`--black-bkgd` で黒）。背景が一様な色のデータ用
 - `--grad-thresh` : densification の閾値（公式 0.0002）。下げるとガウシアンが増える
 - `--max-screen-size 0` : 画面上で大きすぎるものの prune を無効化
 - `--densify-until 0` : densification をしない（初期点のまま最適化だけする）
@@ -139,6 +141,12 @@ SuperSplat などの 3DGS ビューアにドラッグ＆ドロップすれば中
 
 log.csv で 3000 iter の val PSNR だけ極端に低い（約 8 dB）のは、opacity reset で全ガウシアンの
 不透明度を 0.01 に下げた直後の状態を評価しているため。数百 iter で元に戻る。
+
+## 実験
+
+| 実験 | 内容 |
+|---|---|
+| [光沢面で 3DGS は破綻するか](experiments/gloss/README.md) | GoLD_rayt で描いた金の像と同色の拡散面の像で比較。金は像の領域の PSNR で 16〜17 dB 低く、学習視点でも同じくらい悪い（汎化の失敗ではなく表現力の不足） |
 
 ## 発展課題（学習用）
 

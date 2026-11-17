@@ -72,9 +72,10 @@ class GaussianModel:
         return torch.sigmoid(self.params["opacity_logits"]).squeeze(-1)
 
     # ---------------------------------------------------------------- 初期化
-    def init_random(self, n, half_extent, device="cuda"):
-        """一辺 2*half_extent の立方体内にランダムに点を置く（公式実装の合成データ用の初期化と同じ方針）"""
-        xyz = (torch.rand(n, 3, device=device) * 2 - 1) * half_extent
+    def init_random(self, n, half_extent, device="cuda", center=(0.0, 0.0, 0.0)):
+        """center を中心とする一辺 2*half_extent の立方体内にランダムに点を置く
+        （公式実装の合成データ用の初期化と同じ方針）"""
+        xyz = (torch.rand(n, 3, device=device) * 2 - 1) * half_extent + torch.tensor(center, device=device)
         rgb = torch.rand(n, 3, device=device)
         self.init_from_points(xyz, rgb)
 
