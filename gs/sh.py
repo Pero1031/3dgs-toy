@@ -49,3 +49,40 @@ def eval_sh(deg, sh, dirs):
 def rgb_to_sh0(rgb):
     """一定色 rgb になる 0 次係数"""
     return (rgb - 0.5) / C0
+
+
+def sh_basis(deg, dirs):
+    """任意の次数までの実 SH 基底 (N, (deg+1)^2)。並びと符号は eval_sh と同じ（3 次まで一致する）。
+
+    Y_l^m = √2 K_l^m cos(mφ) P_l^m(cosθ)    (m > 0)
+          = K_l^0 P_l^0(cosθ)              (m = 0)
+          = √2 K_l^|m| sin(|m|φ) P_l^|m|(cosθ)  (m < 0)
+    K_l^m = √((2l+1)/(4π) · (l-m)!/(l+m)!)。P_l^m は Condon-Shortley 位相付きの Legendre 陪関数で、漸化式で求める。
+    添字は l² + l + m。精度のため内部は float64。
+    """
+    import math
+
+    import torch
+
+    d = dirs.double()
+    x, y, z = d[:, 0], d[:, 1], d[:, 2]
+    phi = torch.atan2(y, x)
+    s = torch.sqrt((1 - z * z).clamp(min=0))  # sinθ
+    out = torch.zeros(d.shape[0], (deg + 1) ** 2, dtype=torch.float64, device=d.device)
+    pmm = torch.ones_like(z)  # P_m^m
+    for m in range(deg + 1):
+        if m > 0:
+            pmm = -(2 * m - 1) * s * pmm
+        p_prev, p = None, pmm  # P_{l-1}^m, P_l^m（l = m から始める）
+        for l in range(m, deg + 1):
+            if l == m + 1:
+                p_prev, p = p, z * (2 * m + 1) * pmm
+            elif l > m + 1:
+                p_prev, p = p, ((2 * l - 1) * z * p - (l + m - 1) * p_prev) / (l - m)
+            k = math.sqrt((2 * l + 1) / (4 * math.pi) * math.exp(math.lgamma(l - m + 1) - math.lgamma(l + m + 1)))
+            if m == 0:
+                out[:, l * l + l] = k * p
+            else:
+                out[:, l * l + l + m] = math.sqrt(2) * k * torch.cos(m * phi) * p
+                out[:, l * l + l - m] = math.sqrt(2) * k * torch.sin(m * phi) * p
+    return out.to(dirs.dtype)
