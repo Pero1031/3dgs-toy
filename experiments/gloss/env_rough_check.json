@@ -1,0 +1,48 @@
+{
+ "local_degree": 0,
+ "env_smooth": 0.1,
+ "radius_mm": 2.72,
+ "full": {
+  "rho_measured": 0.14026936162026987,
+  "n_identifiable": 4534,
+  "median_fitted_deg": 6.0
+ },
+ "split_half": {
+  "n_both_identifiable": 4402,
+  "rho_even_odd": 0.5495763101130913,
+  "reliability_full_spearman_brown": 0.7093246154143671,
+  "rho_measured_even": 0.09457817686032188,
+  "rho_measured_odd": 0.09566558553279772,
+  "rho_measured_full_corrected": 0.16654833863625557
+ },
+ "recovery": {
+  "residual_rmse_real": 0.0602239373069457,
+  "no_noise": {
+   "noise_rmse": 0.0,
+   "n_identifiable": 4365,
+   "rho_true_recovered": 0.9938669982919421,
+   "median_true_deg": 12.33135986328125,
+   "median_recovered_deg": 12.0
+  },
+  "noise_as_real_residual": {
+   "noise_rmse": 0.0602239373069457,
+   "n_identifiable": 1967,
+   "rho_true_recovered": 0.8946045228336449,
+   "median_true_deg": 12.675283432006836,
+   "median_recovered_deg": 9.999999046325684
+  }
+ },
+ "correlates": {
+  "測った法線のばらつき（半径 2.72 mm）": 0.14026936162026987,
+  "光源の視差（像の中心から見た向きとの差、最大）": -0.14992009541425813,
+  "像の中心からの距離": -0.15679758277706127,
+  "高さ": 0.030098175749417214,
+  "反射光線が光源に当たる観測の割合": -0.14840181068005132,
+  "学習視点の観測数": -0.2245041860815769,
+  "視線と法線の cos の平均": -0.17366290827328026
+ },
+ "parallax_deg": {
+  "median": 3.6623209391042124,
+  "p90": 6.161527583235912
+ }
+}
