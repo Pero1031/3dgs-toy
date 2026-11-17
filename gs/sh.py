@@ -73,6 +73,7 @@ def sh_basis(deg, dirs):
     for m in range(deg + 1):
         if m > 0:
             pmm = -(2 * m - 1) * s * pmm
+            cm, sm = math.sqrt(2) * torch.cos(m * phi), math.sqrt(2) * torch.sin(m * phi)
         p_prev, p = None, pmm  # P_{l-1}^m, P_l^m（l = m から始める）
         for l in range(m, deg + 1):
             if l == m + 1:
@@ -83,6 +84,7 @@ def sh_basis(deg, dirs):
             if m == 0:
                 out[:, l * l + l] = k * p
             else:
-                out[:, l * l + l + m] = math.sqrt(2) * k * torch.cos(m * phi) * p
-                out[:, l * l + l - m] = math.sqrt(2) * k * torch.sin(m * phi) * p
+                kp = k * p
+                out[:, l * l + l + m] = cm * kp
+                out[:, l * l + l - m] = sm * kp
     return out.to(dirs.dtype)
