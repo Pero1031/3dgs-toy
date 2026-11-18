@@ -1,13 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-動くシーンの 3D Gaussian Splatting（4DGS の最小版。Deformable 3D Gaussians の簡略版）。
+動くシーンの 3D Gaussian Splatting（4DGS の最小版）。表現は 2 通り:
 
-基準の形のガウシアン 1 組と、時刻ごとにそれをずらす MLP（gs/deform.py）を同時に学習する。
+    既定         基準の形のガウシアン 1 組と、時刻ごとにそれをずらす MLP（gs/deform.py）を同時に学習する
+                 （Deformable 3D Gaussians の簡略版）
+    --spacetime  各ガウシアンが自分の時刻・時間幅・速度を持つ（gs/spacetime.py。Spacetime Gaussians の簡略版）
+
 データは D-NeRF 形式（transforms_*.json の各フレームに "time"）。
 
     python make_toy_dynamic.py
     python train_dynamic.py --datadir data/toy_dynamic --expname dyn_toy --iters 5000 --warm-up 1000
     python train_dynamic.py --datadir data/toy_dynamic --expname dyn_toy_static --iters 5000 --static   # 比較用
+
+    python train_dynamic.py --datadir data/toy_dynamic --expname dyn_toy_st --iters 5000 --spacetime
 
     --static   変形なし（時刻を無視するふつうの 3DGS）。同じ手順・同じ評価で比べるため
     --warm-up  はじめの何回かは変形なしで学習し、おおまかな形ができてから MLP を動かす（論文は 3000 / 40000）
@@ -33,12 +38,16 @@ from gs.gaussians import GaussianModel
 from gs.loss import psnr, ssim
 from gs.poses import look_at_origin
 from gs.render import render
+from gs.spacetime import SpacetimeModel
 from train import scene_extent, to_u8
 
 
 def render_at(model, net, cam, t, bg, sh_degree, args):
-    """時刻 t の形で描画する（net が None なら変形なし）"""
-    delta = None if net is None else net(model.params["means"].detach(), t)
+    """時刻 t の形で描画する（時刻を持つガウシアンは自分でずれを出す。それ以外で net が None なら変形なし）"""
+    if isinstance(model, SpacetimeModel):
+        delta = model.delta_at(t)
+    else:
+        delta = None if net is None else net(model.params["means"].detach(), t)
     return render(model, cam, bg, sh_degree, tile=args.tile, max_entries=args.max_entries, delta=delta)
 
 
@@ -85,6 +94,10 @@ def main():
     ap.add_argument("--init-extent", type=float, default=1.5, help="初期点を置く立方体の半辺長")
     # 変形場
     ap.add_argument("--static", action="store_true", help="変形なし（ふつうの 3DGS）で学習する")
+    ap.add_argument("--spacetime", action="store_true", help="時刻を持つガウシアン（gs/spacetime.py）で学習する")
+    ap.add_argument("--init-t-scale", type=float, default=0.2, help="--spacetime: 時間幅 σ_t の初期値")
+    ap.add_argument("--t-split-thresh", type=float, default=0.05, help="--spacetime: σ_t がこれより長いものは時間方向に分割する")
+    ap.add_argument("--lr-velocity", type=float, default=1.6e-3, help="--spacetime: 速度の学習率（シーンの大きさを掛ける）")
     ap.add_argument("--warm-up", type=int, default=3000, help="この回数までは変形なしで学習する")
     ap.add_argument("--deform-depth", type=int, default=8)
     ap.add_argument("--deform-width", type=int, default=256)
@@ -119,11 +132,17 @@ def main():
     H, W = train_cams[0].H, train_cams[0].W
     print(f"train {len(train_cams)} 枚 ({W}x{H}), test {len(test_cams)} 枚, extent={extent:.2f}")
 
-    model = GaussianModel(args.sh_degree)
-    model.init_random(args.init_points, args.init_extent, dev)
-    model.setup_optimizer(extent)
+    assert not (args.static and args.spacetime)
+    if args.spacetime:
+        model = SpacetimeModel(args.sh_degree, args.init_t_scale, args.t_split_thresh)
+        model.init_random(args.init_points, args.init_extent, dev)
+        model.setup_optimizer(extent, lr_velocity=args.lr_velocity)
+    else:
+        model = GaussianModel(args.sh_degree)
+        model.init_random(args.init_points, args.init_extent, dev)
+        model.setup_optimizer(extent)
     net, opt_net = None, None
-    if not args.static:
+    if not (args.static or args.spacetime):
         net = DeformNet(args.deform_depth, args.deform_width).to(dev)
         opt_net = torch.optim.Adam(net.parameters(), lr=args.lr_deform, eps=1e-15)
 

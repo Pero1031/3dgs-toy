@@ -10,8 +10,10 @@ from .sh import eval_sh
 
 def render(model, cam, bg, sh_degree, tile=8, max_entries=2 ** 25, near=0.2, delta=None):
     """
-    delta: 動くシーン用。{"means", "log_scales", "quats"} の (N,·) のずれ（gs/deform.py が出す）。
-           位置と log スケールには足し、回転は正規化した四元数に足してから正規化し直す。
+    delta: 動くシーン用。時刻に応じたずれ（gs/deform.py や gs/spacetime.py が出す）。どのキーも省ける。
+           "means" / "log_scales" (N,3)  位置と log スケールに足す
+           "quats" (N,4)                 正規化した四元数に足してから正規化し直す
+           "opacity" (N,)                不透明度に掛ける（その時刻にどれだけ存在するか）
 
     Returns dict:
         image (H,W,3), alpha (H,W)
@@ -22,20 +24,29 @@ def render(model, cam, bg, sh_degree, tile=8, max_entries=2 ** 25, near=0.2, del
     """
     p = model.params
     means_all, log_scales, quats = p["means"], p["log_scales"], p["quats"]
-    if delta is not None:
+    opacity_all = torch.sigmoid(p["opacity_logits"]).squeeze(-1)
+    delta = delta or {}
+    if "means" in delta:
         means_all = means_all + delta["means"]
+    if "log_scales" in delta:
         log_scales = log_scales + delta["log_scales"]
+    if "quats" in delta:
         quats = F.normalize(quats, dim=-1) + delta["quats"]
+    if "opacity" in delta:
+        opacity_all = opacity_all * delta["opacity"]
 
     # カメラの後ろ・近すぎるものを先に取り除く（z<=0 で割ると NaN の勾配が混ざるため、計算前に抜く）
     with torch.no_grad():
         z = means_all @ cam.R[2] + cam.t[2]
-        ids = torch.nonzero(z > near).squeeze(1)
+        keep = z > near
+        if "opacity" in delta:   # この時刻にほぼ存在しないもの。どの画素でも α < 1/255 で捨てられるので結果は同じ
+            keep &= opacity_all > 1.0 / 255.0
+        ids = torch.nonzero(keep).squeeze(1)
 
     means = means_all[ids]
     scales = torch.exp(log_scales[ids])
     quats = F.normalize(quats[ids], dim=-1)
-    opacity = torch.sigmoid(p["opacity_logits"][ids]).squeeze(-1)
+    opacity = opacity_all[ids]
 
     means2d, cov2d, depth = project_gaussians(means, covariance_3d(scales, quats), cam)
     conic, radius, tile_radius = conic_and_radius(cov2d, opacity)

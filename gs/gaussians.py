@@ -164,8 +164,8 @@ class GaussianModel:
                           percent_dense=0.01):
         n0 = len(self)
         grads = self.grad_accum / self.denom.clamp(min=1)
-        scales = self.scales
-        is_big = scales.max(dim=1).values > percent_dense * extent
+        size_thresh = percent_dense * extent
+        is_big = self._is_big(size_thresh)
         clone_mask = (grads >= grad_thresh) & ~is_big
         split_mask = (grads >= grad_thresh) & is_big
         big_screen = self.max_radii2d > max_screen_size if max_screen_size else None
@@ -173,13 +173,7 @@ class GaussianModel:
         # clone: 同じ位置にそのまま複製（深度順で前後が決まるので、以後の勾配で別々に動いていく）
         new = {k: v[clone_mask] for k, v in self.params.items()}
 
-        # split: 元のガウシアンの分布から位置を 2 つサンプルし、1/1.6 に縮めた複製を置く
-        ns = 2
-        split = {k: v[split_mask].repeat(ns, *[1] * (v.dim() - 1)) for k, v in self.params.items()}
-        std = scales[split_mask].repeat(ns, 1)
-        R = quat_to_rotmat(self.quats[split_mask]).repeat(ns, 1, 1)
-        split["means"] = split["means"] + (R @ (torch.randn_like(std) * std)[..., None]).squeeze(-1)
-        split["log_scales"] = torch.log(std / (0.8 * ns))
+        split = self._split_children(split_mask, size_thresh)
 
         self._append({k: torch.cat([new[k], split[k]]) for k in self.names})
 
@@ -192,6 +186,19 @@ class GaussianModel:
         self._keep(~prune)
         self._reset_stats()
         return int(clone_mask.sum()), int(split_mask.sum()), int(prune.sum())
+
+    def _is_big(self, size_thresh):
+        """clone ではなく split するもの（派生クラスで条件を足せる）"""
+        return self.scales.max(dim=1).values > size_thresh
+
+    def _split_children(self, split_mask, size_thresh, ns=2):
+        """split: 元のガウシアンの分布から位置を ns 個サンプルし、1/1.6 に縮めた複製を置く"""
+        split = {k: v[split_mask].repeat(ns, *[1] * (v.dim() - 1)) for k, v in self.params.items()}
+        std = self.scales[split_mask].repeat(ns, 1)
+        R = quat_to_rotmat(self.quats[split_mask]).repeat(ns, 1, 1)
+        split["means"] = split["means"] + (R @ (torch.randn_like(std) * std)[..., None]).squeeze(-1)
+        split["log_scales"] = torch.log(std / (0.8 * ns))
+        return split
 
     @torch.no_grad()
     def reset_opacity(self, value=0.01):
@@ -209,9 +216,9 @@ class GaussianModel:
         return {"max_sh_degree": self.max_sh_degree,
                 "params": {k: v.detach().cpu() for k, v in self.params.items()}}
 
-    @staticmethod
-    def from_state_dict(sd, device="cuda"):
-        m = GaussianModel(sd["max_sh_degree"])
+    @classmethod
+    def from_state_dict(cls, sd, device="cuda"):
+        m = cls(sd["max_sh_degree"])
         m._set({k: v.to(device) for k, v in sd["params"].items()})
         return m
 
