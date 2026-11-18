@@ -27,10 +27,13 @@ MLP を何百回も評価する代わりに、投影と並べ替えで済むの�
 | `gs/sh.py` | 球面調和関数による視点依存の色 |
 | `gs/loss.py` | L1 + SSIM 損失、PSNR |
 | `gs/camera.py` | カメラ（Blender の camera-to-world を OpenCV 流儀に変換して保持） |
-| `gs/dataset.py` | Blender 形式データの読み込み |
+| `gs/dataset.py` | Blender 形式データの読み込み（D-NeRF 形式の各フレームの時刻 `time` も読む） |
+| `gs/deform.py` | 動くシーン用の変形場: 基準の位置と時刻から、位置・回転・大きさのずれを返す MLP |
 | `train.py` | 学習（val 画像・log.csv・チェックポイント・point_cloud.ply を `logs/<expname>/` に出力） |
 | `render_video.py` | 学習済みガウシアンで物体の周りを一周する新規視点画像を描画し、描画速度を表示 |
 | `make_toy_dataset.py` | 動作確認用のおもちゃデータ（球 + 立方体。nerf-toy と同じ） |
+| `train_dynamic.py` | 動くシーンの学習（4DGS の最小版。test 画像・時刻を動かした GIF・eval.json を出力） |
+| `make_toy_dynamic.py` | 動くおもちゃデータ（球が弾んで脈打ち、立方体が往復する。D-NeRF 形式） |
 | `tests/test_rasterize.py` | ラスタライザの検算（素朴な全画素版と画像・勾配を突き合わせる、手書き逆伝播の gradcheck） |
 | `experiments/` | このリポジトリの実装を使った実験（下記） |
 
@@ -112,6 +115,38 @@ SuperSplat などの 3DGS ビューアにドラッグ＆ドロップすれば中
 ```bash
 .venv/Scripts/python train.py --datadir data/nerf_synthetic/lego --expname lego --half-res --init-points 50000
 ```
+
+### 3. 動くシーン（4DGS の最小版）
+
+Deformable 3D Gaussians（Yang et al., CVPR 2024）の簡略版。ガウシアンは基準の形を 1 組だけ持ち、
+時刻 t の形は MLP が基準の位置 x と t から (δx, δq, δs) を出してずらす。色と不透明度は時刻によらない。
+はじめの `--warm-up` 回は変形なしで学習し、おおまかな形ができてから MLP を動かす。
+データは D-NeRF と同じ形式（`transforms_*.json` の各フレームに `"time"`）。学習用は 1 時刻に 1 視点しかない。
+
+```bash
+.venv/Scripts/python make_toy_dynamic.py
+.venv/Scripts/python train_dynamic.py --datadir data/toy_dynamic --expname dyn_toy --iters 7000 --warm-up 1000 --densify-until 5000 --init-extent 2.0
+.venv/Scripts/python train_dynamic.py --datadir data/toy_dynamic --expname dyn_toy_static --iters 7000 --static --densify-until 5000 --init-extent 2.0
+```
+
+結果（256 px、学習 100 枚、テストは学習に無い時刻の 20 枚。Quadro M4000）:
+
+| | test PSNR | SSIM | ガウシアン | 学習時間 |
+|---|---|---|---|---|
+| 変形あり | 25.7 dB | 0.952 | 39,946 | 35 分（0.30 秒/iter、VRAM 3.3 GB） |
+| 変形なし（`--static`） | 14.1 dB | 0.812 | 29,332 | 24 分 |
+
+変形なしでは、動く球と立方体が時刻をまたいでぼやけた 1 つの形になる。
+
+苦手な例として、立方体が球のまわりを半周するデータ（`--orbit`、約 5 単位動く）も試した（5000 iter）:
+
+- `--warm-up 1000`: 15.1 dB。変形なしで学習するあいだに、時刻ごとに別の場所にある立方体は
+  どの場所でもほとんど見えないので、そのガウシアンが消されてしまう。変形を始めた時には、動かす相手が残っていない
+- `--warm-up 0`: 8.8 dB。ランダムな初期点のまま MLP を動かすと発散し、シーン全体が画面の外へ飛ぶ
+- 変形なし: 11.8 dB
+
+基準の形を 1 つ持ってずらす方式は、物体が自分の大きさ程度しか動かないシーン（D-NeRF の合成データなど）
+を想定している。
 
 ## 主なオプション
 

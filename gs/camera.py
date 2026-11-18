@@ -27,6 +27,7 @@ class Camera:
     W: int
     H: int
     image: torch.Tensor | None = None  # (H,W,3) 正解画像 [0,1]
+    time: float | None = None          # 撮影した時刻 [0,1]（動くシーンのときだけ）
 
     @property
     def center(self) -> torch.Tensor:
@@ -34,7 +35,7 @@ class Camera:
         return -self.R.T @ self.t
 
     @staticmethod
-    def from_blender(c2w, W, H, focal, image=None, device="cuda") -> "Camera":
+    def from_blender(c2w, W, H, focal, image=None, device="cuda", time=None) -> "Camera":
         c2w = torch.as_tensor(c2w, dtype=torch.float32).clone()
         c2w[:3, 1:3] *= -1  # OpenGL (+Y上, -Z前) -> OpenCV (+Y下, +Z前): カメラの y, z 軸を反転
         w2c = torch.linalg.inv(c2w)
@@ -42,5 +43,5 @@ class Camera:
             R=w2c[:3, :3].contiguous().to(device),
             t=w2c[:3, 3].contiguous().to(device),
             fx=float(focal), fy=float(focal), cx=W / 2.0, cy=H / 2.0, W=int(W), H=int(H),
-            image=None if image is None else image.to(device),
+            image=None if image is None else image.to(device), time=time,
         )

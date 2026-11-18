@@ -7,6 +7,7 @@ Blender 合成データセット形式（nerf_synthetic・nerf-toy と同じ）�
      "frames": [{"file_path": "./train/r_0", "transform_matrix": 4x4 camera-to-world}, ...]}
 
 file_path に拡張子が無ければ .png を補う。RGBA 画像はアルファで背景色と合成する。
+動くシーン（D-NeRF 形式）は各フレームに "time": 時刻 [0,1] を持ち、Camera.time に入る。
 """
 
 import json
@@ -51,5 +52,6 @@ def load_cameras(datadir, split, half_res=False, bg=(1.0, 1.0, 1.0), device="cud
         img = _load_image(p, half_res, bg)
         H, W = img.shape[:2]
         focal = 0.5 * W / math.tan(0.5 * float(meta["camera_angle_x"]))
-        cams.append(Camera.from_blender(frame["transform_matrix"], W, H, focal, img, device))
+        cams.append(Camera.from_blender(frame["transform_matrix"], W, H, focal, img, device,
+                                        time=frame.get("time")))
     return cams

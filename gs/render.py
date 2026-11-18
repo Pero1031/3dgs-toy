@@ -8,8 +8,11 @@ from .rasterize import conic_and_radius, covariance_3d, project_gaussians, raste
 from .sh import eval_sh
 
 
-def render(model, cam, bg, sh_degree, tile=8, max_entries=2 ** 25, near=0.2):
+def render(model, cam, bg, sh_degree, tile=8, max_entries=2 ** 25, near=0.2, delta=None):
     """
+    delta: 動くシーン用。{"means", "log_scales", "quats"} の (N,·) のずれ（gs/deform.py が出す）。
+           位置と log スケールには足し、回転は正規化した四元数に足してから正規化し直す。
+
     Returns dict:
         image (H,W,3), alpha (H,W)
         means2d (Nv,2)  画面上の中心。学習時は .grad に ∂L/∂μ' が入る（densification の判定に使う）
@@ -18,15 +21,20 @@ def render(model, cam, bg, sh_degree, tile=8, max_entries=2 ** 25, near=0.2):
         radius (Nv,)    画面上の半径 3σ [px]（大きすぎるものの prune 判定に使う）
     """
     p = model.params
+    means_all, log_scales, quats = p["means"], p["log_scales"], p["quats"]
+    if delta is not None:
+        means_all = means_all + delta["means"]
+        log_scales = log_scales + delta["log_scales"]
+        quats = F.normalize(quats, dim=-1) + delta["quats"]
 
     # カメラの後ろ・近すぎるものを先に取り除く（z<=0 で割ると NaN の勾配が混ざるため、計算前に抜く）
     with torch.no_grad():
-        z = p["means"] @ cam.R[2] + cam.t[2]
+        z = means_all @ cam.R[2] + cam.t[2]
         ids = torch.nonzero(z > near).squeeze(1)
 
-    means = p["means"][ids]
-    scales = torch.exp(p["log_scales"][ids])
-    quats = F.normalize(p["quats"][ids], dim=-1)
+    means = means_all[ids]
+    scales = torch.exp(log_scales[ids])
+    quats = F.normalize(quats[ids], dim=-1)
     opacity = torch.sigmoid(p["opacity_logits"][ids]).squeeze(-1)
 
     means2d, cov2d, depth = project_gaussians(means, covariance_3d(scales, quats), cam)
