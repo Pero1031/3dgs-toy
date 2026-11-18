@@ -22,10 +22,12 @@ GoLD_rayt には法線マップがないので、凹凸は細かいメッシュ�
 
     python experiments/gloss/make_sphere.py mesh                 # メッシュを書き、凹凸の傾きを検算する
     python experiments/gloss/make_sphere.py views [--render] [--limit N] [--spp N]
+    python experiments/gloss/make_sphere.py post                 # 3DGS で学習する用の PNG と transforms_*.json
 
 -> data/gloss_sphere/ に mesh/*.ply と mesh/check.json、scenes/*.json、render/{train,test}/*.pfm（512 px、線形の放射輝度。
    *_denoised.pfm はデノイズ後、*_mask.pfm は球のマスク）。256・128 px への縮小は解析側（sphere_rough.py）で行う。
-   3DGS で学習する用の PNG と transforms_*.json は、段階 3 で必要になったら足す
+   post は s{512,256,128}/{train,test}/*.png（表示値。背景は一様な灰色 BG_DISPLAY に置き換える）、
+   s*/masks/{train,test}/*.png（球のマスク）、s*/transforms_{train,test}.json を書く
 """
 
 import argparse
@@ -359,6 +361,44 @@ def cmd_views(a):
     print(f"{len(todo)} 視点を {(time.time() - t0) / 60:.1f} 分で描画")
 
 
+BG_DISPLAY = 0.396        # post で背景に置く一様な色（表示値。像のデータと同じ）
+
+
+def cmd_post(a):
+    """512 px の放射輝度を平均して各画素の大きさにし、背景を一様な色に置き換えて表示値の PNG にする。
+    背景は放射輝度で混ぜる（球の縁の画素は、もとの画素に入っていた環境マップの分が少し残る）"""
+    import imageio.v2 as imageio
+    import torch
+    import torch.nn.functional as F
+
+    import env_rough as er
+    import sphere_rough as sr
+
+    l_bg = float(er.to_radiance(torch.tensor(BG_DISPLAY, dtype=torch.float64)))
+    for scale in SCALES:
+        k = SIZE // scale
+        root = DATA / f"s{scale}"
+        for split in ("train", "test"):
+            (root / split).mkdir(parents=True, exist_ok=True)
+            (root / "masks" / split).mkdir(parents=True, exist_ok=True)
+            frames = []
+            for sp, name, frm in views():
+                if sp != split:
+                    continue
+                base = DATA / "render" / split / name
+                x = torch.from_numpy(sr.read_pfm(f"{base}.pfm")).double()
+                m = torch.from_numpy(sr.read_pfm(f"{base}_mask.pfm")).double()
+                x = F.avg_pool2d(x.permute(2, 0, 1)[None], k)[0].permute(1, 2, 0)
+                m = F.avg_pool2d(m[None, None], k)[0, 0].clamp(0, 1)
+                y = er.radiance_to_display(x * m[..., None] + l_bg * (1 - m[..., None]))
+                imageio.imwrite(root / split / f"{name}.png", (y * 255).round().byte().numpy())
+                imageio.imwrite(root / "masks" / split / f"{name}.png", (m * 255).round().byte().numpy())
+                frames.append({"file_path": f"./{split}/{name}", "transform_matrix": c2w(frm)})
+            meta = {"camera_angle_x": math.radians(FOV), "frames": frames}
+            (root / f"transforms_{split}.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
+        print(f"{scale} px -> {root}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -367,8 +407,9 @@ def main():
     p.add_argument("--spp", type=int, default=512)
     p.add_argument("--render", action="store_true")
     p.add_argument("--limit", type=int, default=None)
+    sub.add_parser("post")
     a = ap.parse_args()
-    {"mesh": cmd_mesh, "views": cmd_views}[a.cmd](a)
+    {"mesh": cmd_mesh, "views": cmd_views, "post": cmd_post}[a.cmd](a)
 
 
 if __name__ == "__main__":

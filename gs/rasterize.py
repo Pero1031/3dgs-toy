@@ -189,14 +189,14 @@ def composite(means2d, conic, opacity, color, tile_xy, tile_local, counts, tile)
     """連続したタイル群（チャンク）の α ブレンディング。
 
     入力はすべて「交差」単位（M 個）で、タイル番号→深度の順に並んでいる。
-        means2d (M,2), conic (M,3), opacity (M,), color (M,3)
+        means2d (M,2), conic (M,3), opacity (M,), color (M,C)  C は色なら 3（法線などの特徴量も同じように合成できる）
         tile_xy (M,2) その交差のタイル左上の画素座標
         tile_local (M,) チャンク内のタイル番号 0..n_tiles-1（昇順）
         counts (n_tiles,) 各タイルの交差数
     タイル内の全画素 (P = tile*tile 個) と交差 m の組を (P, M) のテンソルとして一度に計算する。
 
     Returns
-        rgb (n_tiles, P, 3)   Σ c_i α_i T_i
+        rgb (n_tiles, P, C)   Σ c_i α_i T_i
         T_final (n_tiles, P)  全ガウシアン通過後の透過率（背景色の重み）
     """
     P = tile * tile
@@ -220,7 +220,7 @@ def composite(means2d, conic, opacity, color, tile_xy, tile_local, counts, tile)
 
     n_tiles = counts.shape[0]
     weight = alpha * T                                                # 各ガウシアンの寄与 α_i T_i
-    rgb = torch.zeros(P, n_tiles, 3, device=weight.device).index_add(
+    rgb = torch.zeros(P, n_tiles, color.shape[-1], device=weight.device).index_add(
         1, tile_local, weight[..., None] * color[None])
     log_T = torch.zeros(P, n_tiles, device=weight.device).index_add(1, tile_local, log1m)
     return rgb.transpose(0, 1), torch.exp(log_T).transpose(0, 1)
@@ -247,8 +247,10 @@ def rasterize(means2d, conic, opacity, color, radius, depth, W, H, bg,
     逆伝播時に再計算する（中間テンソルを全部覚えておくと VRAM が足りないため）。
     1 要素あたり、逆伝播用の保存分と一時領域を合わせて 60〜70 バイト程度使う。
 
+    color は (N,C)。bg は長さ C（またはスカラー）。
+
     Returns
-        image (H,W,3), alpha (H,W) 累積不透明度, on_screen (N,)
+        image (H,W,C), alpha (H,W) 累積不透明度, on_screen (N,)
     """
     gid, tile_id, on_screen, tiles_x, tiles_y = bin_tiles(means2d, radius, depth, W, H, tile)
     n_tiles = tiles_x * tiles_y
@@ -315,4 +317,4 @@ def rasterize_dense_reference(means2d, conic, opacity, color, radius, depth, W, 
 
     T = torch.cumprod(torch.cat([torch.ones_like(alpha[:1]), 1 - alpha], 0), 0)  # (N+1, P)
     rgb = ((alpha * T[:-1])[..., None] * color[:, None, :]).sum(0) + T[-1][:, None] * bg
-    return rgb.reshape(H, W, 3), (1 - T[-1]).reshape(H, W)
+    return rgb.reshape(H, W, -1), (1 - T[-1]).reshape(H, W)

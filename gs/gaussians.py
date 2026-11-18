@@ -46,6 +46,8 @@ def knn_mean_sq_dist(x, k=3, chunk=2048):
 
 
 class GaussianModel:
+    names = NAMES  # 学習パラメータの名前。派生クラスで足せる（densification と Adam の作り直しはこの一覧に従う）
+
     def __init__(self, sh_degree=3):
         self.max_sh_degree = sh_degree
         self.params = {}
@@ -93,7 +95,7 @@ class GaussianModel:
         })
 
     def _set(self, tensors):
-        self.params = {k: nn.Parameter(tensors[k].contiguous()) for k in NAMES}
+        self.params = {k: nn.Parameter(tensors[k].contiguous()) for k in self.names}
         self._reset_stats()
 
     def _reset_stats(self):
@@ -104,13 +106,14 @@ class GaussianModel:
 
     # ---------------------------------------------------------------- 最適化
     def setup_optimizer(self, spatial_scale, lr_means=1.6e-4, lr_means_final=1.6e-6,
-                        lr_sh=2.5e-3, lr_opacity=0.05, lr_scale=5e-3, lr_rot=1e-3):
-        """学習率は公開当初の公式実装の既定値。位置の学習率だけシーンの大きさに比例させ、指数減衰させる。"""
+                        lr_sh=2.5e-3, lr_opacity=0.05, lr_scale=5e-3, lr_rot=1e-3, extra_lrs=None):
+        """学習率は公開当初の公式実装の既定値。位置の学習率だけシーンの大きさに比例させ、指数減衰させる。
+        extra_lrs は派生クラスで足したパラメータの学習率 {名前: 学習率}"""
         self.lr_means_init = lr_means * spatial_scale
         self.lr_means_final = lr_means_final * spatial_scale
         lrs = {"means": self.lr_means_init, "sh0": lr_sh, "shN": lr_sh / 20,
-               "opacity_logits": lr_opacity, "log_scales": lr_scale, "quats": lr_rot}
-        groups = [{"params": [self.params[k]], "lr": lrs[k], "name": k} for k in NAMES]
+               "opacity_logits": lr_opacity, "log_scales": lr_scale, "quats": lr_rot, **(extra_lrs or {})}
+        groups = [{"params": [self.params[k]], "lr": lrs[k], "name": k} for k in self.names]
         self.optimizer = torch.optim.Adam(groups, lr=0.0, eps=1e-15)
 
     def update_lr(self, step, max_steps):
@@ -134,13 +137,13 @@ class GaussianModel:
         self.params[name] = new
 
     def _append(self, extra):
-        for k in NAMES:
+        for k in self.names:
             e = extra[k]
             self._replace(k, torch.cat([self.params[k].detach(), e]),
                           lambda s, e=e: torch.cat([s, torch.zeros_like(e)]))  # 新しい点のモーメントは 0
 
     def _keep(self, mask):
-        for k in NAMES:
+        for k in self.names:
             self._replace(k, self.params[k].detach()[mask], lambda s: s[mask])
 
     # ---------------------------------------------------------------- densification
@@ -178,7 +181,7 @@ class GaussianModel:
         split["means"] = split["means"] + (R @ (torch.randn_like(std) * std)[..., None]).squeeze(-1)
         split["log_scales"] = torch.log(std / (0.8 * ns))
 
-        self._append({k: torch.cat([new[k], split[k]]) for k in NAMES})
+        self._append({k: torch.cat([new[k], split[k]]) for k in self.names})
 
         # prune: split の元、ほぼ透明なもの、（opacity reset 後は）大きすぎるもの
         pad = torch.zeros(len(self) - n0, dtype=torch.bool, device=self.means.device)
