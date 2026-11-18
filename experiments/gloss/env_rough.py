@@ -103,7 +103,7 @@ class Obs:
         self.pid, self.n_pts, self.space = p_idx, vis.shape[1], space
         self.ydisp = col[v_idx, p_idx].double()
         d = dirs[v_idx, p_idx]
-        n = Ns[p_idx]
+        n = Ns[v_idx, p_idx] if Ns.dim() == 3 else Ns[p_idx]  # 法線は点ごと (n_pts, 3) か観測ごと (V, n_pts, 3)
         self.d = d
         r = d - 2 * (d * n).sum(-1, keepdim=True) * n  # 視線を法線で折り返した方向（env_oracle.reflect と同じ）
         self.Y = torch.cat([sh_basis(LE, r[i:i + OBS_CHUNK]).float() for i in range(0, len(r), OBS_CHUNK)])
@@ -138,6 +138,17 @@ def attenuation(sig, Le=LE):
     return torch.exp(-l * (l + 1) * sig.float()[..., None] ** 2 / 2)
 
 
+def att_rows(o, sig, Le=LE):
+    """観測の行の範囲 sl を受けて、その行のぼけの減衰 (len(sl), Ke) を返す関数。
+    sig は点ごとの σ (n_pts,)、または文字列 "obs"（観測ごとの σ を o.sig_obs (n_obs,) に置いたもの）"""
+    if isinstance(sig, str):
+        assert sig == "obs"
+        s_obs = o.sig_obs
+        return lambda sl: attenuation(s_obs[sl], Le)
+    a_pt = attenuation(sig, Le)
+    return lambda sl: a_pt[o.pid[sl]]
+
+
 def local_chol(o, L):
     """点ごとの項の正規方程式 A_p = Σ w Bl Blᵀ + R のコレスキー因子（チャンネルごと） (3, n_pts, K, K)"""
     Bl = o.local(L)
@@ -149,9 +160,10 @@ def local_chol(o, L):
 
 
 def fit_env(o, sig_pt, Lp, smooths, Le=LE):
-    """点ごとのぼけ sig_pt (n_pts,) を固定して、共有の照明 e を解く（点ごとの項は Schur 補元で消去） -> {s: e (Ke, 3)}"""
+    """点ごとのぼけ sig_pt (n_pts,)（または "obs"、att_rows を参照）を固定して、共有の照明 e を解く
+    （点ごとの項は Schur 補元で消去） -> {s: e (Ke, 3)}"""
     Ke = (Le + 1) ** 2
-    a_pt = attenuation(sig_pt, Le)
+    att = att_rows(o, sig_pt, Le)
     Bl = o.local(Lp)
     K = Bl.shape[1]
     Lc = local_chol(o, Lp)
@@ -163,7 +175,7 @@ def fit_env(o, sig_pt, Lp, smooths, Le=LE):
         M = torch.zeros(o.n_pts, K, Ke, device=DEV)  # Σ w Bl Beᵀ（点ごと）
         for i in range(0, len(o.pid), OBS_CHUNK):
             sl = slice(i, i + OBS_CHUNK)
-            Be = o.Y[sl, :Ke] * a_pt[o.pid[sl]]
+            Be = o.Y[sl, :Ke] * att(sl)
             Bw = Be * w[sl, None].float()
             S += (Bw.T @ Be).double()
             rhs += Bw.T.double() @ y[sl]
@@ -182,11 +194,11 @@ def fit_env(o, sig_pt, Lp, smooths, Le=LE):
 
 def env_pred(o, e, sig_pt, Le=LE):
     Ke = (Le + 1) ** 2
-    a_pt = attenuation(sig_pt, Le)
+    att = att_rows(o, sig_pt, Le)
     out = torch.empty(len(o.pid), 3, dtype=F64, device=DEV)
     for i in range(0, len(o.pid), OBS_CHUNK):
         sl = slice(i, i + OBS_CHUNK)
-        out[sl] = ((o.Y[sl, :Ke] * a_pt[o.pid[sl]]) @ e.float()).double()
+        out[sl] = ((o.Y[sl, :Ke] * att(sl)) @ e.float()).double()
     return out
 
 

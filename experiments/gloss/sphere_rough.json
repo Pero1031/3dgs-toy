@@ -1,0 +1,1140 @@
+{
+ "settings": {
+  "n_per_sector": 800,
+  "lat_max_deg": 50.0,
+  "border_margin_deg": 7.0,
+  "footprint_samples": 512,
+  "super_samples": 64,
+  "local_degree": 0,
+  "env_smooth": 0.1,
+  "env_degree": 48,
+  "identifiable_contrast": 0.02,
+  "sectors": [
+   [
+    "smooth_a",
+    0.0,
+    "au"
+   ],
+   [
+    "bump3",
+    3.0,
+    "au"
+   ],
+   [
+    "bump6",
+    6.0,
+    "au"
+   ],
+   [
+    "bump12",
+    12.0,
+    "au"
+   ],
+   [
+    "smooth_b",
+    0.0,
+    "au"
+   ],
+   [
+    "brdf3",
+    0.0,
+    "brdf3"
+   ],
+   [
+    "brdf6",
+    0.0,
+    "brdf6"
+   ],
+   [
+    "brdf12",
+    0.0,
+    "brdf12"
+   ]
+  ],
+  "materials": {
+   "au": {
+    "type": "conductor",
+    "metal": "Au",
+    "roughness": 0.1
+   },
+   "brdf3": {
+    "type": "conductor",
+    "metal": "Au",
+    "roughness": 0.3096
+   },
+   "brdf6": {
+    "type": "conductor",
+    "metal": "Au",
+    "roughness": 0.4384
+   },
+   "brdf12": {
+    "type": "conductor",
+    "metal": "Au",
+    "roughness": 0.6235
+   }
+  }
+ },
+ "scales": {
+  "512": {
+   "pixel_width_mm_median": 1.2133209705352783,
+   "n_points_geom": 4000,
+   "n_obs_geom": {
+    "train": 115804,
+    "test": 13068
+   },
+   "models": {
+    "sh6": {
+     "train": 24.870628763461944,
+     "test": 19.252031255599235,
+     "test_by_sector": {
+      "smooth_a": 16.955249290127416,
+      "bump3": 22.512714667679404,
+      "bump6": 21.004626523173652,
+      "bump12": 22.024620870013525,
+      "smooth_b": 17.921781391454626
+     }
+    },
+    "material": {
+     "train": 24.399061723058992,
+     "test": 24.629168264428003,
+     "test_by_sector": {
+      "smooth_a": 24.457117501430517,
+      "bump3": 29.462629232255747,
+      "bump6": 25.088489603811155,
+      "bump12": 21.8066181703488,
+      "smooth_b": 26.452074688783938
+     }
+    },
+    "measured_pt": {
+     "train": 25.837671792917615,
+     "test": 26.27718548791219,
+     "test_by_sector": {
+      "smooth_a": 27.181952749366012,
+      "bump3": 30.587802649404985,
+      "bump6": 26.23142458819911,
+      "bump12": 22.8571646131857,
+      "smooth_b": 29.187697884002475
+     }
+    },
+    "fitted": {
+     "train": 26.422586369576276,
+     "test": 26.331732290303233,
+     "test_by_sector": {
+      "smooth_a": 26.91516098348012,
+      "bump3": 30.196708748706488,
+      "bump6": 26.03295477979344,
+      "bump12": 23.26484813710153,
+      "smooth_b": 29.093751241009397
+     }
+    },
+    "measured_obs": {
+     "train": 25.99206532854882,
+     "test": 26.321456423962783,
+     "test_by_sector": {
+      "smooth_a": 27.202837421889274,
+      "bump3": 31.754650745434326,
+      "bump6": 26.275391075364144,
+      "bump12": 22.79904469538934,
+      "smooth_b": 29.17644587313564
+     }
+    },
+    "measured_obs_aniso": {
+     "train": 26.380554323606663,
+     "test": 26.6091050032893,
+     "test_by_sector": {
+      "smooth_a": 27.154006782193587,
+      "bump3": 32.01195391222112,
+      "bump6": 26.577856332040074,
+      "bump12": 23.31767115829759,
+      "smooth_b": 29.127073041513086
+     }
+    },
+    "supersampled": {
+     "train": 27.37798982365075,
+     "test": 27.64265206038224,
+     "test_by_sector": {
+      "smooth_a": 26.985682050178067,
+      "bump3": 34.11094834128557,
+      "bump6": 29.52370293684446,
+      "bump12": 24.651007347263985,
+      "smooth_b": 28.984633014422613
+     }
+    }
+   },
+   "scan_measured_obs": {
+    "0.5": {
+     "train": 26.283490712231043,
+     "test": 26.577163208630914
+    },
+    "0.6": {
+     "train": 26.433429132557254,
+     "test": 26.684287183907287
+    },
+    "0.7": {
+     "train": 26.454848098460673,
+     "test": 26.678112911847606
+    },
+    "0.8": {
+     "train": 26.36961759596972,
+     "test": 26.597326486765425
+    },
+    "0.9": {
+     "train": 26.206324404678895,
+     "test": 26.472138061135123
+    },
+    "1.0": {
+     "train": 25.99206601691632,
+     "test": 26.32145972486725
+    }
+   },
+   "fitted_all": {
+    "train": 27.175238437960246,
+    "test": 26.862287220439406,
+    "test_by_sector": {
+     "smooth_a": 25.99499861006173,
+     "bump3": 30.20432659954833,
+     "bump6": 26.042027419391562,
+     "bump12": 23.275904765327912,
+     "smooth_b": 27.405652267459853,
+     "brdf3": 28.609093438450508,
+     "brdf6": 27.27163350360593,
+     "brdf12": 30.1893077769428
+    }
+   },
+   "sectors": {
+    "smooth_a": {
+     "n_points": 800,
+     "design_blur_deg": 0.0,
+     "measured_pt_deg": 0.3471786677837372,
+     "measured_obs_rms_deg": 0.5548565983772278,
+     "mean": {
+      "measured_pt_deg": 0.3470596969127655,
+      "measured_obs_rms_deg": 0.5529245138168335,
+      "measured_obs_aniso_rms_deg": 0.4418849995359778,
+      "equiv_l4_deg": 0.5221535263583064,
+      "equiv_l12_deg": 0.5215512735024095
+     },
+     "measured_obs_aniso_rms_deg": 0.44265829026699066,
+     "equiv_l4_deg": 0.5228592455387115,
+     "equiv_l12_deg": 0.5223124325275421,
+     "fitted_geom": {
+      "n_identifiable": 800,
+      "median_deg": 0.0,
+      "q25_deg": 0.0,
+      "q75_deg": 0.9999999403953552,
+      "mean_deg": 0.35124997928738594
+     },
+     "fitted_all": {
+      "n_identifiable": 800,
+      "median_deg": 0.0,
+      "q25_deg": 0.0,
+      "q75_deg": 0.9999999403953552,
+      "mean_deg": 0.29499998286366463
+     }
+    },
+    "bump3": {
+     "n_points": 800,
+     "design_blur_deg": 6.0,
+     "measured_pt_deg": 3.7413687705993652,
+     "measured_obs_rms_deg": 4.48491907119751,
+     "mean": {
+      "measured_pt_deg": 3.8986644744873047,
+      "measured_obs_rms_deg": 4.616791248321533,
+      "measured_obs_aniso_rms_deg": 3.8287844198942182,
+      "equiv_l4_deg": 3.8940041510760786,
+      "equiv_l12_deg": 3.894071577787399
+     },
+     "measured_obs_aniso_rms_deg": 3.7155834436416626,
+     "equiv_l4_deg": 3.7430964708328247,
+     "equiv_l12_deg": 3.720661759376526,
+     "fitted_geom": {
+      "n_identifiable": 800,
+      "median_deg": 3.0,
+      "q25_deg": 1.9999998807907104,
+      "q75_deg": 3.999999761581421,
+      "mean_deg": 3.264999860152602
+     },
+     "fitted_all": {
+      "n_identifiable": 800,
+      "median_deg": 3.0,
+      "q25_deg": 1.9999998807907104,
+      "q75_deg": 3.999999761581421,
+      "mean_deg": 3.1037498630583285
+     }
+    },
+    "bump6": {
+     "n_points": 800,
+     "design_blur_deg": 12.0,
+     "measured_pt_deg": 7.776472568511963,
+     "measured_obs_rms_deg": 9.414722442626953,
+     "mean": {
+      "measured_pt_deg": 8.045875549316406,
+      "measured_obs_rms_deg": 9.520501136779785,
+      "measured_obs_aniso_rms_deg": 7.883694516718387,
+      "equiv_l4_deg": 8.036154411137105,
+      "equiv_l12_deg": 8.429376483559608
+     },
+     "measured_obs_aniso_rms_deg": 7.842904806137085,
+     "equiv_l4_deg": 7.968506336212158,
+     "equiv_l12_deg": 7.9315712451934814,
+     "fitted_geom": {
+      "n_identifiable": 799,
+      "median_deg": 6.0,
+      "q25_deg": 3.999999761581421,
+      "q75_deg": 7.999999523162842,
+      "mean_deg": 6.735919590512563
+     },
+     "fitted_all": {
+      "n_identifiable": 798,
+      "median_deg": 6.0,
+      "q25_deg": 3.999999761581421,
+      "q75_deg": 7.999999523162842,
+      "mean_deg": 6.547618749446439
+     }
+    },
+    "bump12": {
+     "n_points": 800,
+     "design_blur_deg": 24.0,
+     "measured_pt_deg": 15.035575866699219,
+     "measured_obs_rms_deg": 18.153865814208984,
+     "mean": {
+      "measured_pt_deg": 15.551987648010254,
+      "measured_obs_rms_deg": 18.306297302246094,
+      "measured_obs_aniso_rms_deg": 15.148536190986633,
+      "equiv_l4_deg": 16.116582557559013,
+      "equiv_l12_deg": 14.645677760243416
+     },
+     "measured_obs_aniso_rms_deg": 14.99726152420044,
+     "equiv_l4_deg": 15.342231273651123,
+     "equiv_l12_deg": 15.419933795928955,
+     "fitted_geom": {
+      "n_identifiable": 780,
+      "median_deg": 12.0,
+      "q25_deg": 7.999999523162842,
+      "q75_deg": 18.0,
+      "mean_deg": 13.50384574670058
+     },
+     "fitted_all": {
+      "n_identifiable": 782,
+      "median_deg": 12.0,
+      "q25_deg": 7.999999523162842,
+      "q75_deg": 18.0,
+      "mean_deg": 13.586956080039748
+     }
+    },
+    "smooth_b": {
+     "n_points": 800,
+     "design_blur_deg": 0.0,
+     "measured_pt_deg": 0.3471786677837372,
+     "measured_obs_rms_deg": 0.5545699596405029,
+     "mean": {
+      "measured_pt_deg": 0.347116082906723,
+      "measured_obs_rms_deg": 0.5538161993026733,
+      "measured_obs_aniso_rms_deg": 0.4424254737049341,
+      "equiv_l4_deg": 0.5230400757864118,
+      "equiv_l12_deg": 0.522434404194355
+     },
+     "measured_obs_aniso_rms_deg": 0.44249141216278076,
+     "equiv_l4_deg": 0.5230752527713776,
+     "equiv_l12_deg": 0.5224336981773376,
+     "fitted_geom": {
+      "n_identifiable": 800,
+      "median_deg": 0.0,
+      "q25_deg": 0.0,
+      "q75_deg": 0.9999999403953552,
+      "mean_deg": 0.28624998293817044
+     },
+     "fitted_all": {
+      "n_identifiable": 800,
+      "median_deg": 0.0,
+      "q25_deg": 0.0,
+      "q75_deg": 0.0,
+      "mean_deg": 0.2712499838322401
+     }
+    },
+    "brdf3": {
+     "n_points": 800,
+     "design_blur_deg": 6.0,
+     "measured_pt_deg": 0.3471786677837372,
+     "measured_obs_rms_deg": 0.5564577579498291,
+     "mean": {
+      "measured_pt_deg": 0.3471187651157379,
+      "measured_obs_rms_deg": 0.5540425777435303
+     },
+     "fitted_all": {
+      "n_identifiable": 800,
+      "median_deg": 7.999999523162842,
+      "q25_deg": 6.0,
+      "q75_deg": 7.999999523162842,
+      "mean_deg": 7.762499668300152
+     }
+    },
+    "brdf6": {
+     "n_points": 800,
+     "design_blur_deg": 12.0,
+     "measured_pt_deg": 0.3471786677837372,
+     "measured_obs_rms_deg": 0.557216227054596,
+     "mean": {
+      "measured_pt_deg": 0.3471736013889313,
+      "measured_obs_rms_deg": 0.5544073581695557
+     },
+     "fitted_all": {
+      "n_identifiable": 800,
+      "median_deg": 15.0,
+      "q25_deg": 12.0,
+      "q75_deg": 15.0,
+      "mean_deg": 13.491249914467335
+     }
+    },
+    "brdf12": {
+     "n_points": 800,
+     "design_blur_deg": 24.0,
+     "measured_pt_deg": 0.3471786677837372,
+     "measured_obs_rms_deg": 0.5544703006744385,
+     "mean": {
+      "measured_pt_deg": 0.3470863997936249,
+      "measured_obs_rms_deg": 0.5531019568443298
+     },
+     "fitted_all": {
+      "n_identifiable": 800,
+      "median_deg": 27.0,
+      "q25_deg": 15.0,
+      "q75_deg": 27.0,
+      "mean_deg": 23.77374988079071
+     }
+    }
+   },
+   "spearman": {
+    "geom_measured_pt_vs_fitted": 0.9040462425441503,
+    "geom_measured_obs_rms_vs_fitted": 0.9004320963532584,
+    "within_bump3": 0.6476697104474654,
+    "within_bump6": 0.6054091919885727,
+    "within_bump12": 0.6799676724670931,
+    "n_bump_identifiable": 2379
+   }
+  },
+  "256": {
+   "pixel_width_mm_median": 2.426633834838867,
+   "n_points_geom": 4000,
+   "n_obs_geom": {
+    "train": 115803,
+    "test": 13068
+   },
+   "models": {
+    "sh6": {
+     "train": 24.811782855887593,
+     "test": 19.42011894376957,
+     "test_by_sector": {
+      "smooth_a": 17.073420975628103,
+      "bump3": 22.750937537232645,
+      "bump6": 21.40478605699331,
+      "bump12": 22.073011662967616,
+      "smooth_b": 18.09296275101657
+     }
+    },
+    "material": {
+     "train": 23.49320236003374,
+     "test": 23.529641058639648,
+     "test_by_sector": {
+      "smooth_a": 22.557411518753696,
+      "bump3": 29.2574728057278,
+      "bump6": 24.023524489693187,
+      "bump12": 21.252440004263757,
+      "smooth_b": 25.094253699051986
+     }
+    },
+    "measured_pt": {
+     "train": 25.483023138044597,
+     "test": 25.82403069636986,
+     "test_by_sector": {
+      "smooth_a": 26.400408964506173,
+      "bump3": 31.49638835609578,
+      "bump6": 25.7810322518895,
+      "bump12": 22.401914559702085,
+      "smooth_b": 28.702725417545963
+     }
+    },
+    "fitted": {
+     "train": 26.179186860213193,
+     "test": 25.890935684784054,
+     "test_by_sector": {
+      "smooth_a": 25.889146921423986,
+      "bump3": 30.88647727217957,
+      "bump6": 25.662943780388364,
+      "bump12": 22.988912713819758,
+      "smooth_b": 28.49566410103934
+     }
+    },
+    "measured_obs": {
+     "train": 25.463222572609887,
+     "test": 25.75725273403018,
+     "test_by_sector": {
+      "smooth_a": 26.265860057797713,
+      "bump3": 31.78120353073681,
+      "bump6": 25.78180011844438,
+      "bump12": 22.348191236956385,
+      "smooth_b": 28.47429132118876
+     }
+    },
+    "measured_obs_aniso": {
+     "train": 25.958845708498632,
+     "test": 26.05143521107486,
+     "test_by_sector": {
+      "smooth_a": 26.18871400504448,
+      "bump3": 32.051002741441316,
+      "bump6": 26.096410399164036,
+      "bump12": 22.903050766643226,
+      "smooth_b": 28.46037635681157
+     }
+    },
+    "supersampled": {
+     "train": 26.568962145234508,
+     "test": 26.571911494263176,
+     "test_by_sector": {
+      "smooth_a": 26.007645922647416,
+      "bump3": 33.89569214306601,
+      "bump6": 27.62231852125554,
+      "bump12": 23.501226631411182,
+      "smooth_b": 28.488864538464252
+     }
+    }
+   },
+   "scan_measured_obs": {
+    "0.5": {
+     "train": 25.60659365893601,
+     "test": 25.64774101889277
+    },
+    "0.6": {
+     "train": 25.870910524484934,
+     "test": 25.880856289551456
+    },
+    "0.7": {
+     "train": 25.962775610335104,
+     "test": 25.985116315321708
+    },
+    "0.8": {
+     "train": 25.90042703623357,
+     "test": 25.984657297187525
+    },
+    "0.9": {
+     "train": 25.72070623466603,
+     "test": 25.901940993726388
+    },
+    "1.0": {
+     "train": 25.463226249284485,
+     "test": 25.757246475569282
+    }
+   },
+   "fitted_all": {
+    "train": 27.309060344257926,
+    "test": 26.96260419430097,
+    "test_by_sector": {
+     "smooth_a": 25.19674782762504,
+     "bump3": 30.857782227864096,
+     "bump6": 25.579328079297508,
+     "bump12": 23.18382273838614,
+     "smooth_b": 27.14478062450095,
+     "brdf3": 30.03432953223279,
+     "brdf6": 28.640404604270124,
+     "brdf12": 31.22822325277796
+    }
+   },
+   "sectors": {
+    "smooth_a": {
+     "n_points": 800,
+     "design_blur_deg": 0.0,
+     "measured_pt_deg": 0.6943573355674744,
+     "measured_obs_rms_deg": 1.1126800775527954,
+     "mean": {
+      "measured_pt_deg": 0.6944882273674011,
+      "measured_obs_rms_deg": 1.1091318130493164,
+      "measured_obs_aniso_rms_deg": 0.8860223082453013,
+      "equiv_l4_deg": 1.0473758071660995,
+      "equiv_l12_deg": 1.0420982944220305
+     },
+     "measured_obs_aniso_rms_deg": 0.8873305916786194,
+     "equiv_l4_deg": 1.049885630607605,
+     "equiv_l12_deg": 1.0437546968460083,
+     "fitted_geom": {
+      "n_identifiable": 800,
+      "median_deg": 0.0,
+      "q25_deg": 0.0,
+      "q75_deg": 0.9999999403953552,
+      "mean_deg": 0.29249998323619364
+     },
+     "fitted_all": {
+      "n_identifiable": 800,
+      "median_deg": 0.0,
+      "q25_deg": 0.0,
+      "q75_deg": 0.0,
+      "mean_deg": 0.2549999854713678
+     }
+    },
+    "bump3": {
+     "n_points": 800,
+     "design_blur_deg": 6.0,
+     "measured_pt_deg": 5.213274955749512,
+     "measured_obs_rms_deg": 5.4984846115112305,
+     "mean": {
+      "measured_pt_deg": 5.369564056396484,
+      "measured_obs_rms_deg": 5.602497577667236,
+      "measured_obs_aniso_rms_deg": 4.714592110514641,
+      "equiv_l4_deg": 4.750813343524933,
+      "equiv_l12_deg": 4.827971468269825
+     },
+     "measured_obs_aniso_rms_deg": 4.6167685985565186,
+     "equiv_l4_deg": 4.605453729629517,
+     "equiv_l12_deg": 4.640394449234009,
+     "fitted_geom": {
+      "n_identifiable": 800,
+      "median_deg": 3.999999761581421,
+      "q25_deg": 3.0,
+      "q75_deg": 4.999999523162842,
+      "mean_deg": 4.109999808445573
+     },
+     "fitted_all": {
+      "n_identifiable": 800,
+      "median_deg": 3.999999761581421,
+      "q25_deg": 3.0,
+      "q75_deg": 4.999999523162842,
+      "mean_deg": 4.003749806061387
+     }
+    },
+    "bump6": {
+     "n_points": 800,
+     "design_blur_deg": 12.0,
+     "measured_pt_deg": 11.091647148132324,
+     "measured_obs_rms_deg": 11.343969345092773,
+     "mean": {
+      "measured_pt_deg": 11.055583953857422,
+      "measured_obs_rms_deg": 11.396357536315918,
+      "measured_obs_aniso_rms_deg": 9.595858927965164,
+      "equiv_l4_deg": 9.71306249499321,
+      "equiv_l12_deg": 11.52847716808319
+     },
+     "measured_obs_aniso_rms_deg": 9.545933246612549,
+     "equiv_l4_deg": 9.682015895843506,
+     "equiv_l12_deg": 11.476768970489502,
+     "fitted_geom": {
+      "n_identifiable": 800,
+      "median_deg": 7.999999523162842,
+      "q25_deg": 6.0,
+      "q75_deg": 9.999999046325684,
+      "mean_deg": 8.386249611005187
+     },
+     "fitted_all": {
+      "n_identifiable": 800,
+      "median_deg": 7.999999523162842,
+      "q25_deg": 6.0,
+      "q75_deg": 9.999999046325684,
+      "mean_deg": 8.263749599084258
+     }
+    },
+    "bump12": {
+     "n_points": 800,
+     "design_blur_deg": 24.0,
+     "measured_pt_deg": 21.168560028076172,
+     "measured_obs_rms_deg": 21.650745391845703,
+     "mean": {
+      "measured_pt_deg": 21.1927433013916,
+      "measured_obs_rms_deg": 21.762269973754883,
+      "measured_obs_aniso_rms_deg": 18.33845845460892,
+      "equiv_l4_deg": 20.972617946863174,
+      "equiv_l12_deg": 15.968157606124878
+     },
+     "measured_obs_aniso_rms_deg": 18.233339309692383,
+     "equiv_l4_deg": 19.22903537750244,
+     "equiv_l12_deg": 16.329326629638672,
+     "fitted_geom": {
+      "n_identifiable": 795,
+      "median_deg": 15.0,
+      "q25_deg": 9.999999046325684,
+      "q75_deg": 18.0,
+      "mean_deg": 15.284276307903745
+     },
+     "fitted_all": {
+      "n_identifiable": 797,
+      "median_deg": 15.0,
+      "q25_deg": 9.999999046325684,
+      "q75_deg": 18.0,
+      "mean_deg": 15.084064809411503
+     }
+    },
+    "smooth_b": {
+     "n_points": 800,
+     "design_blur_deg": 0.0,
+     "measured_pt_deg": 0.6949207186698914,
+     "measured_obs_rms_deg": 1.1121995449066162,
+     "mean": {
+      "measured_pt_deg": 0.6945735216140747,
+      "measured_obs_rms_deg": 1.1109333038330078,
+      "measured_obs_aniso_rms_deg": 0.8871149597316981,
+      "equiv_l4_deg": 1.0492093358933925,
+      "equiv_l12_deg": 1.043882059827447
+     },
+     "measured_obs_aniso_rms_deg": 0.8870044648647308,
+     "equiv_l4_deg": 1.049083948135376,
+     "equiv_l12_deg": 1.0439568161964417,
+     "fitted_geom": {
+      "n_identifiable": 800,
+      "median_deg": 0.0,
+      "q25_deg": 0.0,
+      "q75_deg": 0.9999999403953552,
+      "mean_deg": 0.3124999813735485
+     },
+     "fitted_all": {
+      "n_identifiable": 800,
+      "median_deg": 0.0,
+      "q25_deg": 0.0,
+      "q75_deg": 0.9999999403953552,
+      "mean_deg": 0.289999982714653
+     }
+    },
+    "brdf3": {
+     "n_points": 800,
+     "design_blur_deg": 6.0,
+     "measured_pt_deg": 0.6949207186698914,
+     "measured_obs_rms_deg": 1.116032600402832,
+     "mean": {
+      "measured_pt_deg": 0.6945501565933228,
+      "measured_obs_rms_deg": 1.1113373041152954
+     },
+     "fitted_all": {
+      "n_identifiable": 800,
+      "median_deg": 7.999999523162842,
+      "q25_deg": 7.999999523162842,
+      "q75_deg": 7.999999523162842,
+      "mean_deg": 8.036249618232251
+     }
+    },
+    "brdf6": {
+     "n_points": 800,
+     "design_blur_deg": 12.0,
+     "measured_pt_deg": 0.6949207186698914,
+     "measured_obs_rms_deg": 1.1173932552337646,
+     "mean": {
+      "measured_pt_deg": 0.6946269273757935,
+      "measured_obs_rms_deg": 1.112093448638916
+     },
+     "fitted_all": {
+      "n_identifiable": 800,
+      "median_deg": 15.0,
+      "q25_deg": 12.0,
+      "q75_deg": 15.0,
+      "mean_deg": 13.908749928474426
+     }
+    },
+    "brdf12": {
+     "n_points": 800,
+     "design_blur_deg": 24.0,
+     "measured_pt_deg": 0.6943573355674744,
+     "measured_obs_rms_deg": 1.1121978759765625,
+     "mean": {
+      "measured_pt_deg": 0.6944559216499329,
+      "measured_obs_rms_deg": 1.109388828277588
+     },
+     "fitted_all": {
+      "n_identifiable": 798,
+      "median_deg": 27.0,
+      "q25_deg": 18.0,
+      "q75_deg": 27.0,
+      "mean_deg": 24.234335679458198
+     }
+    }
+   },
+   "spearman": {
+    "geom_measured_pt_vs_fitted": 0.9255946491240308,
+    "geom_measured_obs_rms_vs_fitted": 0.9254899981527652,
+    "within_bump3": 0.6655758777979407,
+    "within_bump6": 0.6765980262045107,
+    "within_bump12": 0.6985590764836767,
+    "n_bump_identifiable": 2395
+   }
+  },
+  "128": {
+   "pixel_width_mm_median": 4.8342766761779785,
+   "n_points_geom": 4000,
+   "n_obs_geom": {
+    "train": 107657,
+    "test": 12139
+   },
+   "models": {
+    "sh6": {
+     "train": 25.05395443198796,
+     "test": 19.8024605587584,
+     "test_by_sector": {
+      "smooth_a": 17.300538346263842,
+      "bump3": 22.516844561536494,
+      "bump6": 21.933042581235735,
+      "bump12": 23.099469624709208,
+      "smooth_b": 18.52439929579652
+     }
+    },
+    "material": {
+     "train": 23.295264019384767,
+     "test": 23.061279121844386,
+     "test_by_sector": {
+      "smooth_a": 21.113238366815487,
+      "bump3": 29.285448854889793,
+      "bump6": 24.737809089294345,
+      "bump12": 21.226029798610053,
+      "smooth_b": 24.756237709407507
+     }
+    },
+    "measured_pt": {
+     "train": 25.81783097381456,
+     "test": 26.054382502539525,
+     "test_by_sector": {
+      "smooth_a": 25.0583138817778,
+      "bump3": 32.43672031217006,
+      "bump6": 27.609465776183875,
+      "bump12": 23.103583392696624,
+      "smooth_b": 28.603950298977423
+     }
+    },
+    "fitted": {
+     "train": 26.586929179102864,
+     "test": 26.048055715137572,
+     "test_by_sector": {
+      "smooth_a": 24.443568366669663,
+      "bump3": 32.08040556710684,
+      "bump6": 27.662092959604884,
+      "bump12": 23.664802779697318,
+      "smooth_b": 28.373376203569315
+     }
+    },
+    "measured_obs": {
+     "train": 25.521643292554383,
+     "test": 25.594580364659194,
+     "test_by_sector": {
+      "smooth_a": 24.186414153188846,
+      "bump3": 32.38810088194445,
+      "bump6": 27.51641011635403,
+      "bump12": 23.015711781419196,
+      "smooth_b": 27.509646596596152
+     }
+    },
+    "measured_obs_aniso": {
+     "train": 26.158928262275495,
+     "test": 26.064118473373842,
+     "test_by_sector": {
+      "smooth_a": 24.44332415861642,
+      "bump3": 32.91442063710879,
+      "bump6": 27.94996337400987,
+      "bump12": 23.756186976142367,
+      "smooth_b": 27.771599749440355
+     }
+    },
+    "supersampled": {
+     "train": 26.417085872462934,
+     "test": 26.25266030106217,
+     "test_by_sector": {
+      "smooth_a": 24.585082408020376,
+      "bump3": 34.188896555211045,
+      "bump6": 28.611501958823307,
+      "bump12": 23.56916760784354,
+      "smooth_b": 28.524418013432225
+     }
+    }
+   },
+   "scan_measured_obs": {
+    "0.5": {
+     "train": 25.449352727215867,
+     "test": 25.190059722720832
+    },
+    "0.6": {
+     "train": 25.8286350385556,
+     "test": 25.571321592350344
+    },
+    "0.7": {
+     "train": 26.01077659051819,
+     "test": 25.78784614206587
+    },
+    "0.8": {
+     "train": 25.997805370462178,
+     "test": 25.847788323237175
+    },
+    "0.9": {
+     "train": 25.82006743261491,
+     "test": 25.775066636989536
+    },
+    "1.0": {
+     "train": 25.521663711288447,
+     "test": 25.594596199074946
+    }
+   },
+   "fitted_all": {
+    "train": 27.84089198356149,
+    "test": 27.368851567344358,
+    "test_by_sector": {
+     "smooth_a": 24.1300633842536,
+     "bump3": 32.11364028420521,
+     "bump6": 27.5936020133148,
+     "bump12": 23.862078001890982,
+     "smooth_b": 27.307641031737866,
+     "brdf3": 31.400011440046605,
+     "brdf6": 29.9927362244399,
+     "brdf12": 31.14765463530988
+    }
+   },
+   "sectors": {
+    "smooth_a": {
+     "n_points": 800,
+     "design_blur_deg": 0.0,
+     "measured_pt_deg": 1.3836328983306885,
+     "measured_obs_rms_deg": 2.075162887573242,
+     "mean": {
+      "measured_pt_deg": 1.3837743997573853,
+      "measured_obs_rms_deg": 2.0744946002960205,
+      "measured_obs_aniso_rms_deg": 1.685993582457304,
+      "equiv_l4_deg": 1.9468541865050792,
+      "equiv_l12_deg": 1.9145939648151398
+     },
+     "measured_obs_aniso_rms_deg": 1.686190903186798,
+     "equiv_l4_deg": 1.9471745491027832,
+     "equiv_l12_deg": 1.9165527820587158,
+     "fitted_geom": {
+      "n_identifiable": 800,
+      "median_deg": 0.0,
+      "q25_deg": 0.0,
+      "q75_deg": 0.9999999403953552,
+      "mean_deg": 0.3087499829381704
+     },
+     "fitted_all": {
+      "n_identifiable": 800,
+      "median_deg": 0.0,
+      "q25_deg": 0.0,
+      "q75_deg": 0.9999999403953552,
+      "mean_deg": 0.30374998301267625
+     }
+    },
+    "bump3": {
+     "n_points": 800,
+     "design_blur_deg": 6.0,
+     "measured_pt_deg": 5.718293190002441,
+     "measured_obs_rms_deg": 5.9723968505859375,
+     "mean": {
+      "measured_pt_deg": 5.802215576171875,
+      "measured_obs_rms_deg": 6.039037704467773,
+      "measured_obs_aniso_rms_deg": 5.124981700181961,
+      "equiv_l4_deg": 5.212232991755009,
+      "equiv_l12_deg": 5.198252314925194
+     },
+     "measured_obs_aniso_rms_deg": 5.06023383140564,
+     "equiv_l4_deg": 5.125372409820557,
+     "equiv_l12_deg": 5.091174364089966,
+     "fitted_geom": {
+      "n_identifiable": 800,
+      "median_deg": 3.999999761581421,
+      "q25_deg": 3.0,
+      "q75_deg": 4.999999523162842,
+      "mean_deg": 4.284999774992466
+     },
+     "fitted_all": {
+      "n_identifiable": 800,
+      "median_deg": 3.999999761581421,
+      "q25_deg": 3.999999761581421,
+      "q75_deg": 4.999999523162842,
+      "mean_deg": 4.237499775588512
+     }
+    },
+    "bump6": {
+     "n_points": 800,
+     "design_blur_deg": 12.0,
+     "measured_pt_deg": 11.59322738647461,
+     "measured_obs_rms_deg": 11.764041900634766,
+     "mean": {
+      "measured_pt_deg": 11.668298721313477,
+      "measured_obs_rms_deg": 11.811199188232422,
+      "measured_obs_aniso_rms_deg": 10.056353310942649,
+      "equiv_l4_deg": 10.164540863037109,
+      "equiv_l12_deg": 11.602511499524116
+     },
+     "measured_obs_aniso_rms_deg": 10.003149509429932,
+     "equiv_l4_deg": 10.091164588928223,
+     "equiv_l12_deg": 11.62868070602417,
+     "fitted_geom": {
+      "n_identifiable": 800,
+      "median_deg": 7.999999523162842,
+      "q25_deg": 7.999999523162842,
+      "q75_deg": 9.999999046325684,
+      "mean_deg": 8.737499555647373
+     },
+     "fitted_all": {
+      "n_identifiable": 800,
+      "median_deg": 7.999999523162842,
+      "q25_deg": 7.999999523162842,
+      "q75_deg": 9.999999046325684,
+      "mean_deg": 8.704999552667141
+     }
+    },
+    "bump12": {
+     "n_points": 800,
+     "design_blur_deg": 24.0,
+     "measured_pt_deg": 22.072982788085938,
+     "measured_obs_rms_deg": 22.1983699798584,
+     "mean": {
+      "measured_pt_deg": 22.239526748657227,
+      "measured_obs_rms_deg": 22.403432846069336,
+      "measured_obs_aniso_rms_deg": 19.104840487241745,
+      "equiv_l4_deg": 20.86695558309555,
+      "equiv_l12_deg": 16.147080066204072
+     },
+     "measured_obs_aniso_rms_deg": 18.94178581237793,
+     "equiv_l4_deg": 19.952348709106445,
+     "equiv_l12_deg": 16.434295654296875,
+     "fitted_geom": {
+      "n_identifiable": 795,
+      "median_deg": 15.0,
+      "q25_deg": 12.0,
+      "q75_deg": 18.0,
+      "mean_deg": 15.950943023753617
+     },
+     "fitted_all": {
+      "n_identifiable": 799,
+      "median_deg": 15.0,
+      "q25_deg": 12.0,
+      "q75_deg": 18.0,
+      "mean_deg": 15.95118858936582
+     }
+    },
+    "smooth_b": {
+     "n_points": 800,
+     "design_blur_deg": 0.0,
+     "measured_pt_deg": 1.383915662765503,
+     "measured_obs_rms_deg": 2.074873447418213,
+     "mean": {
+      "measured_pt_deg": 1.3838406801223755,
+      "measured_obs_rms_deg": 2.0746102333068848,
+      "measured_obs_aniso_rms_deg": 1.6860256776213647,
+      "equiv_l4_deg": 1.9470984077453612,
+      "equiv_l12_deg": 1.9153483457863332
+     },
+     "measured_obs_aniso_rms_deg": 1.6853044629096985,
+     "equiv_l4_deg": 1.9458012580871582,
+     "equiv_l12_deg": 1.917390763759613,
+     "fitted_geom": {
+      "n_identifiable": 800,
+      "median_deg": 0.0,
+      "q25_deg": 0.0,
+      "q75_deg": 0.9999999403953552,
+      "mean_deg": 0.45499997310340407
+     },
+     "fitted_all": {
+      "n_identifiable": 800,
+      "median_deg": 0.0,
+      "q25_deg": 0.0,
+      "q75_deg": 0.9999999403953552,
+      "mean_deg": 0.44749997355043886
+     }
+    },
+    "brdf3": {
+     "n_points": 800,
+     "design_blur_deg": 6.0,
+     "measured_pt_deg": 1.3836328983306885,
+     "measured_obs_rms_deg": 2.0716352462768555,
+     "mean": {
+      "measured_pt_deg": 1.383669376373291,
+      "measured_obs_rms_deg": 2.0709424018859863
+     },
+     "fitted_all": {
+      "n_identifiable": 800,
+      "median_deg": 7.999999523162842,
+      "q25_deg": 7.999999523162842,
+      "q75_deg": 7.999999523162842,
+      "mean_deg": 8.289999587237835
+     }
+    },
+    "brdf6": {
+     "n_points": 800,
+     "design_blur_deg": 12.0,
+     "measured_pt_deg": 1.383915662765503,
+     "measured_obs_rms_deg": 2.069112539291382,
+     "mean": {
+      "measured_pt_deg": 1.383852481842041,
+      "measured_obs_rms_deg": 2.0726141929626465
+     },
+     "fitted_all": {
+      "n_identifiable": 800,
+      "median_deg": 15.0,
+      "q25_deg": 15.0,
+      "q75_deg": 15.0,
+      "mean_deg": 14.37999995559454
+     }
+    },
+    "brdf12": {
+     "n_points": 800,
+     "design_blur_deg": 24.0,
+     "measured_pt_deg": 1.3836328983306885,
+     "measured_obs_rms_deg": 2.0655715465545654,
+     "mean": {
+      "measured_pt_deg": 1.3835595846176147,
+      "measured_obs_rms_deg": 2.0676605701446533
+     },
+     "fitted_all": {
+      "n_identifiable": 795,
+      "median_deg": 27.0,
+      "q25_deg": 21.999998092651367,
+      "q75_deg": 27.0,
+      "mean_deg": 24.534590765515212
+     }
+    }
+   },
+   "spearman": {
+    "geom_measured_pt_vs_fitted": 0.930611424724905,
+    "geom_measured_obs_rms_vs_fitted": 0.9313473939765039,
+    "within_bump3": 0.5973324669087385,
+    "within_bump6": 0.5737221104608108,
+    "within_bump12": 0.5932692627214808,
+    "n_bump_identifiable": 2395
+   }
+  }
+ },
+ "denoised_256": {
+  "smooth_a": {
+   "fitted_geom": {
+    "n_identifiable": 800,
+    "median_deg": 0.0,
+    "q25_deg": 0.0,
+    "q75_deg": 0.9999999403953552,
+    "mean_deg": 0.2937499831616879
+   }
+  },
+  "bump3": {
+   "fitted_geom": {
+    "n_identifiable": 800,
+    "median_deg": 3.999999761581421,
+    "q25_deg": 3.0,
+    "q75_deg": 4.999999523162842,
+    "mean_deg": 4.067499806284904
+   }
+  },
+  "bump6": {
+   "fitted_geom": {
+    "n_identifiable": 800,
+    "median_deg": 7.999999523162842,
+    "q25_deg": 6.0,
+    "q75_deg": 9.999999046325684,
+    "mean_deg": 8.563749589473009
+   }
+  },
+  "bump12": {
+   "fitted_geom": {
+    "n_identifiable": 800,
+    "median_deg": 15.0,
+    "q25_deg": 12.0,
+    "q75_deg": 18.0,
+    "mean_deg": 15.501249602735042
+   }
+  },
+  "smooth_b": {
+   "fitted_geom": {
+    "n_identifiable": 800,
+    "median_deg": 0.0,
+    "q25_deg": 0.0,
+    "q75_deg": 0.9999999403953552,
+    "mean_deg": 0.30374998189508917
+   }
+  }
+ }
+}
