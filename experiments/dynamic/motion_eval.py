@@ -38,6 +38,7 @@ import make_toy_dynamic as toy  # noqa: E402
 from gs.deform import DeformNet  # noqa: E402
 from gs.gaussians import GaussianModel  # noqa: E402
 from gs.spacetime import SpacetimeModel  # noqa: E402
+from gs.trajectory import TrajectoryModel  # noqa: E402
 
 OBJS = ("sphere", "cube")
 DELTAS = (0.025, 0.1, 0.25, 0.5)
@@ -90,7 +91,10 @@ class Run:
         a = ck["args"]
         self.name = Path(path).parent.name
         self.net = None
-        if a.get("spacetime"):
+        if a.get("trajectory"):
+            self.kind = "trajectory"
+            self.model = TrajectoryModel.from_state_dict(ck["model"], dev)
+        elif a.get("spacetime"):
             self.kind = "spacetime"
             self.model = SpacetimeModel.from_state_dict(ck["model"], dev)
         else:
@@ -108,6 +112,8 @@ class Run:
         if self.kind == "spacetime":
             d = m.delta_at(t)
             x, w = x + d["means"], w * d["opacity"]
+        elif self.kind == "trajectory":
+            x = x + m.delta_at(t)["means"]
         elif self.net is not None:
             x = x + self.net(x, t)["means"]
         return x.double().cpu().numpy(), w.double().cpu().numpy()

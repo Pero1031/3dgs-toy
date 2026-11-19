@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-動くシーンの 3D Gaussian Splatting（4DGS の最小版）。表現は 2 通り:
+動くシーンの 3D Gaussian Splatting（4DGS の最小版）。表現は 3 通り:
 
     既定         基準の形のガウシアン 1 組と、時刻ごとにそれをずらす MLP（gs/deform.py）を同時に学習する
                  （Deformable 3D Gaussians の簡略版）
     --spacetime  各ガウシアンが自分の時刻・時間幅・速度を持つ（gs/spacetime.py。Spacetime Gaussians の簡略版）
+    --trajectory 各ガウシアンが時刻の節点ごとの位置を持ち、時間の順に追跡しながら学習する
+                 （gs/trajectory.py。Dynamic 3D Gaussians の簡略版）
 
 データは D-NeRF 形式（transforms_*.json の各フレームに "time"）。
 
@@ -39,12 +41,13 @@ from gs.loss import psnr, ssim
 from gs.poses import look_at_origin
 from gs.render import render
 from gs.spacetime import SpacetimeModel
+from gs.trajectory import TrajectoryModel
 from train import scene_extent, to_u8
 
 
 def render_at(model, net, cam, t, bg, sh_degree, args):
-    """時刻 t の形で描画する（時刻を持つガウシアンは自分でずれを出す。それ以外で net が None なら変形なし）"""
-    if isinstance(model, SpacetimeModel):
+    """時刻 t の形で描画する（--spacetime / --trajectory は自分でずれを出す。それ以外で net が None なら変形なし）"""
+    if isinstance(model, (SpacetimeModel, TrajectoryModel)):
         delta = model.delta_at(t)
     else:
         delta = None if net is None else net(model.params["means"].detach(), t)
@@ -70,6 +73,9 @@ def velocity_smoothness(model, net, out, t, n_anchor=1024, k=8, tau=0.02, eps=0.
     d, nb = d[:, 1:], nb[:, 1:]                                          # 先頭は自分自身
     if isinstance(model, SpacetimeModel):
         v = model.params["velocity"][ids]
+        va, vn = v[a], v[nb]
+    elif isinstance(model, TrajectoryModel):
+        v = model.velocity_at(t)[ids]
         va, vn = v[a], v[nb]
     else:   # 変形場: τ だけ離れた時刻との位置の差を速度とみなす
         tau = tau if t + tau <= 1.0 else -tau
@@ -126,6 +132,12 @@ def main():
     ap.add_argument("--init-t-scale", type=float, default=0.2, help="--spacetime: 時間幅 σ_t の初期値")
     ap.add_argument("--t-split-thresh", type=float, default=0.05, help="--spacetime: σ_t がこれより長いものは時間方向に分割する")
     ap.add_argument("--lr-velocity", type=float, default=1.6e-3, help="--spacetime: 速度の学習率（シーンの大きさを掛ける）")
+    ap.add_argument("--trajectory", action="store_true", help="時刻ごとの位置を持つガウシアン（gs/trajectory.py）で学習する")
+    ap.add_argument("--knots", type=int, default=21, help="--trajectory: 時刻の節点の数")
+    ap.add_argument("--knots-init", type=int, default=3, help="--trajectory: はじめから使う節点の数")
+    ap.add_argument("--grow-from", type=int, default=1000, help="--trajectory: この回数から節点を増やし始める")
+    ap.add_argument("--grow-every", type=int, default=150, help="--trajectory: 何回ごとに次の節点を使い始めるか")
+    ap.add_argument("--lr-offsets", type=float, default=3.2e-4, help="--trajectory: 節点のずれの学習率（シーンの大きさを掛ける）")
     ap.add_argument("--min-t-scale", type=float, default=0.0, help="--spacetime: σ_t の下限（これより短くならない）")
     ap.add_argument("--lambda-smooth", type=float, default=0.0,
                     help="近くのガウシアンの速度をそろえる損失の重み（0 で使わない。変形場でも --spacetime でも使える）")
@@ -163,8 +175,12 @@ def main():
     H, W = train_cams[0].H, train_cams[0].W
     print(f"train {len(train_cams)} 枚 ({W}x{H}), test {len(test_cams)} 枚, extent={extent:.2f}")
 
-    assert not (args.static and args.spacetime)
-    if args.spacetime:
+    assert args.static + args.spacetime + args.trajectory <= 1
+    if args.trajectory:
+        model = TrajectoryModel(args.sh_degree, args.knots, args.knots_init)
+        model.init_random(args.init_points, args.init_extent, dev)
+        model.setup_optimizer(extent, lr_offsets=args.lr_offsets)
+    elif args.spacetime:
         model = SpacetimeModel(args.sh_degree, args.init_t_scale, args.t_split_thresh, args.min_t_scale)
         model.init_random(args.init_points, args.init_extent, dev)
         model.setup_optimizer(extent, lr_velocity=args.lr_velocity)
@@ -173,7 +189,7 @@ def main():
         model.init_random(args.init_points, args.init_extent, dev)
         model.setup_optimizer(extent)
     net, opt_net = None, None
-    if not (args.static or args.spacetime):
+    if not (args.static or args.spacetime or args.trajectory):
         net = DeformNet(args.deform_depth, args.deform_width).to(dev)
         opt_net = torch.optim.Adam(net.parameters(), lr=args.lr_deform, eps=1e-15)
 
@@ -194,9 +210,18 @@ def main():
                 g["lr"] = args.lr_deform * math.exp(s * math.log(1 / 500))
         if it % 1000 == 0:
             sh_degree = min(sh_degree + 1, args.sh_degree)
-        if not order:
-            order = torch.randperm(len(train_cams)).tolist()
-        cam = train_cams[order.pop()]
+        if args.trajectory and model.n_active < args.knots:
+            # 時間の順に学習する: 使い始めた節点までのフレームだけを使い、半分はいちばん新しい 2 区間から選ぶ
+            if it >= args.grow_from and (it - args.grow_from) % args.grow_every == 0:
+                model.activate_next()
+            t_max = model.t_active + 1e-6
+            recent = t_max - 2.0 / (args.knots - 1) if torch.rand(()) < 0.5 else -1.0
+            pool = [c for c in train_cams if recent <= c.time <= t_max]
+            cam = pool[torch.randint(len(pool), ()).item()]
+        else:
+            if not order:
+                order = torch.randperm(len(train_cams)).tolist()
+            cam = train_cams[order.pop()]
 
         out = render_at(model, net if deforming else None, cam, cam.time, bg, sh_degree, args)
         img = out["image"]
