@@ -71,12 +71,28 @@ def render(c2w, H, W, focal):
     return np.concatenate([rgb, alpha[..., None]], -1)
 
 
+def render_aa(c2w, H, W, focal, s, *args):
+    """1 画素を s×s 本のレイで描いて平均する（輪郭と模様の境目のギザギザを消す）。s=1 なら render と同じ。
+
+    色は不透明度を掛けてから平均し、平均した不透明度で割り戻す（PNG の RGBA は掛けていない色を持つので）。
+    """
+    if s == 1:
+        return render(c2w, H, W, focal, *args)
+    img = render(c2w, H * s, W * s, focal * s, *args).reshape(H, s, W, s, 4)
+    a = img[..., 3].mean((1, 3))
+    pm = (img[..., :3] * img[..., 3:]).mean((1, 3))
+    rgb = np.where(a[..., None] > 0, pm / np.maximum(a[..., None], 1e-12), 1.0)
+    return np.concatenate([rgb, a[..., None]], -1)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=Path, default=Path("data/toy_sphere"))
     ap.add_argument("--size", type=int, default=200)
     ap.add_argument("--n-train", type=int, default=60)
     ap.add_argument("--n-val", type=int, default=8)
+    ap.add_argument("--supersample", type=int, default=4,
+                    help="1 画素を何×何本のレイで描いて平均するか（1 だと輪郭がギザギザになり、ガウシアンでは再現できない）")
     ap.add_argument("--radius", type=float, default=4.0)
     args = ap.parse_args()
 
@@ -93,7 +109,7 @@ def main():
             else:
                 az, el = 360.0 * k / n + 15.0, 30.0
             c2w = look_at_origin(az, el, args.radius)
-            img = render(c2w, args.size, args.size, focal)
+            img = render_aa(c2w, args.size, args.size, focal, args.supersample)
             imageio.imwrite(args.out / split / f"r_{k}.png", (img * 255).round().astype(np.uint8))
             frames.append({"file_path": f"./{split}/r_{k}", "transform_matrix": c2w.tolist()})
         with open(args.out / f"transforms_{split}.json", "w", encoding="utf-8") as f:
