@@ -5,7 +5,7 @@
     既定         基準の形のガウシアン 1 組と、時刻ごとにそれをずらす MLP（gs/deform.py）を同時に学習する
                  （Deformable 3D Gaussians の簡略版）
     --spacetime  各ガウシアンが自分の時刻・時間幅・速度を持つ（gs/spacetime.py。Spacetime Gaussians の簡略版）
-    --trajectory 各ガウシアンが時刻の節点ごとの位置を持ち、時間の順に追跡しながら学習する
+    --trajectory 各ガウシアンが時刻の節点ごとの位置を持つ（--knots-init 3 で、時間の順に追跡しながら学習する）
                  （gs/trajectory.py。Dynamic 3D Gaussians の簡略版）
 
 データは D-NeRF 形式（transforms_*.json の各フレームに "time"）。
@@ -42,6 +42,7 @@ from gs.poses import look_at_origin
 from gs.render import render
 from gs.spacetime import SpacetimeModel
 from gs.trajectory import TrajectoryModel
+import make_toy_dynamic as toy
 from train import scene_extent, to_u8
 
 
@@ -83,6 +84,48 @@ def velocity_smoothness(model, net, out, t, n_anchor=1024, k=8, tau=0.02, eps=0.
         v = (net(model.params["means"][pts].detach(), t + tau)["means"] - delta["means"][pts]) / tau
         va, vn = v[: len(a)], v[len(a):].view(len(a), k, 3)
     return ((va[:, None] - vn).pow(2).sum(-1) / (d.pow(2) + eps ** 2)).mean()
+
+
+def track_loss(model, net, out, cam, cam2, orbit, n=4096, tol=0.1):
+    """正解の動きから作った「誤りのない 2D 追跡」に合わせる損失（make_toy_dynamic.py のデータ専用）。
+
+    実際の単眼の手法は、学習済みの点追跡モデルの出力（同じ点が別のフレームのどの画素に写るか）を損失に入れる。
+    おもちゃデータは動きの式が分かるので、その追跡が完全に正しい場合の上限を測れる。
+    時刻 t に面の近く（|符号付き距離| < tol）にあって、カメラから見える側にあるガウシアンについて、
+    別のフレーム cam2 の時刻でのそのガウシアンの位置を cam2 に投影し、正解の移動先の投影と比べる。
+    比べるのは画面上の位置だけなので、cam2 の視線方向のずれは罰しない（2D の追跡と同じ）。
+    """
+    ids = out["ids"]
+    if len(ids) == 0:
+        return torch.zeros((), device=ids.device)
+    means = model.params["means"]
+    pts = ids[torch.randint(len(ids), (min(n, len(ids)),), device=ids.device)]
+    x0 = (means + out["delta"]["means"])[pts].detach()
+    f32 = lambda v: torch.as_tensor(v, dtype=torch.float32, device=x0.device)
+    (c0, r0, b0), (c1, r1, b1) = [[f32(v) for v in toy.scene(c.time, orbit)] for c in (cam, cam2)]
+
+    # いちばん近い物体と、その面の法線・正解の移動先
+    rel_s, rel_b = x0 - c0, x0 - b0
+    q = rel_b.abs() - toy.BOX_H
+    d_s = rel_s.norm(dim=1) - r0
+    d_b = q.clamp(min=0).norm(dim=1) + q.max(1).values.clamp(max=0)
+    on_sphere = d_s.abs() < d_b.abs()
+    n_b = torch.zeros_like(x0).scatter_(1, q.argmax(1, keepdim=True), 1.0) * rel_b.sign()
+    normal = torch.where(on_sphere[:, None], rel_s / rel_s.norm(dim=1, keepdim=True).clamp(min=1e-8), n_b)
+    target = torch.where(on_sphere[:, None], c1 + (r1 / r0) * rel_s, x0 + b1 - b0)
+    ok = (torch.minimum(d_s.abs(), d_b.abs()) < tol)         & ((normal * (cam.center - x0)).sum(1) > 0) & ((normal * (cam2.center - target)).sum(1) > 0)
+    if not ok.any():
+        return torch.zeros((), device=ids.device)
+
+    if isinstance(model, (SpacetimeModel, TrajectoryModel)):
+        x1 = means[pts] + model.delta_at(cam2.time)["means"][pts]
+    else:
+        x1 = means[pts] + net(means[pts].detach(), cam2.time)["means"]
+
+    def project(x):
+        p = x @ cam2.R.T + cam2.t
+        return p[:, :2] / p[:, 2:3].clamp(min=1e-3)     # 焦点距離で割った画面座標
+    return (project(x1) - project(target)).abs().sum(1)[ok].mean()
 
 
 @torch.no_grad()
@@ -134,13 +177,18 @@ def main():
     ap.add_argument("--lr-velocity", type=float, default=1.6e-3, help="--spacetime: 速度の学習率（シーンの大きさを掛ける）")
     ap.add_argument("--trajectory", action="store_true", help="時刻ごとの位置を持つガウシアン（gs/trajectory.py）で学習する")
     ap.add_argument("--knots", type=int, default=21, help="--trajectory: 時刻の節点の数")
-    ap.add_argument("--knots-init", type=int, default=3, help="--trajectory: はじめから使う節点の数")
+    ap.add_argument("--knots-init", type=int, default=None,
+                    help="--trajectory: はじめから使う節点の数（既定は全部。3 などにすると時間の順に節点を増やしながら学習する）")
     ap.add_argument("--grow-from", type=int, default=1000, help="--trajectory: この回数から節点を増やし始める")
     ap.add_argument("--grow-every", type=int, default=150, help="--trajectory: 何回ごとに次の節点を使い始めるか")
     ap.add_argument("--lr-offsets", type=float, default=3.2e-4, help="--trajectory: 節点のずれの学習率（シーンの大きさを掛ける）")
     ap.add_argument("--min-t-scale", type=float, default=0.0, help="--spacetime: σ_t の下限（これより短くならない）")
     ap.add_argument("--lambda-smooth", type=float, default=0.0,
                     help="近くのガウシアンの速度をそろえる損失の重み（0 で使わない。変形場でも --spacetime でも使える）")
+    ap.add_argument("--lambda-track", type=float, default=0.0,
+                    help="正解の動きから作った 2D 追跡に合わせる損失の重み（0 で使わない。make_toy_dynamic.py のデータ専用）")
+    ap.add_argument("--track-window", type=float, default=0.1, help="--lambda-track: 追跡で結ぶ 2 フレームの時刻の差の上限")
+    ap.add_argument("--orbit", action="store_true", help="--lambda-track: データが make_toy_dynamic.py --orbit のもの")
     ap.add_argument("--warm-up", type=int, default=3000, help="この回数までは変形なしで学習する")
     ap.add_argument("--deform-depth", type=int, default=8)
     ap.add_argument("--deform-width", type=int, default=256)
@@ -177,7 +225,7 @@ def main():
 
     assert args.static + args.spacetime + args.trajectory <= 1
     if args.trajectory:
-        model = TrajectoryModel(args.sh_degree, args.knots, args.knots_init)
+        model = TrajectoryModel(args.sh_degree, args.knots, args.knots_init or args.knots)
         model.init_random(args.init_points, args.init_extent, dev)
         model.setup_optimizer(extent, lr_offsets=args.lr_offsets)
     elif args.spacetime:
@@ -229,6 +277,12 @@ def main():
         loss = (1 - args.lambda_ssim) * l1 + args.lambda_ssim * (1 - ssim(img, cam.image))
         if args.lambda_smooth > 0 and out["delta"] is not None:
             loss = loss + args.lambda_smooth * velocity_smoothness(model, net, out, cam.time)
+        if args.lambda_track > 0 and out["delta"] is not None:
+            t_hi = model.t_active + 1e-6 if args.trajectory else 1.0
+            pool = [c for c in train_cams if 0 < abs(c.time - cam.time) <= args.track_window + 1e-6 and c.time <= t_hi]
+            if pool:
+                cam2 = pool[torch.randint(len(pool), ()).item()]
+                loss = loss + args.lambda_track * track_loss(model, net, out, cam, cam2, args.orbit)
         loss.backward()
 
         with torch.no_grad():
