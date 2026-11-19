@@ -154,7 +154,7 @@ def evaluate(run, orbit, tol, n_t=41):
 
     if run.kind == "spacetime":
         p = run.model.params
-        sig = torch.exp(p["log_t_scale"]).squeeze(-1)
+        sig = run.model.t_scales.squeeze(-1)
         res["t_scale_median"] = sig.median().item()
         res["t_scale_quartiles"] = torch.quantile(sig, torch.tensor([0.25, 0.75], device=sig.device)).tolist()
         res["speed_median"] = p["velocity"].norm(dim=1).median().item()
