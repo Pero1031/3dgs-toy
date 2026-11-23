@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-3D Gaussian Splatting の微分可能ラスタライザ（PyTorch のテンソル演算のみ）。
+Differentiable rasterizer for 3D Gaussian Splatting (PyTorch tensor operations only).
 
-公式実装（diff-gaussian-rasterization）は前向き・逆向きとも CUDA で手書きしているが、
-ここでは前向き計算だけを PyTorch で書き、勾配は autograd に任せる。処理の流れは公式と同じ:
+The official implementation (diff-gaussian-rasterization) hand-writes both the forward and backward passes in CUDA.
+Here only the forward computation is written in PyTorch, and gradients are left to autograd. The flow is the same
+as the official one:
 
-  1. project_gaussians : 3D ガウシアンを画面に投影し、2D ガウシアン（中心 μ'・共分散 Σ'）にする
-  2. bin_tiles         : 画面を tile×tile 画素のタイルに分け、各ガウシアンが覆うタイルを列挙して
-                         (タイル番号, 深度) をキーにソートする
-  3. composite         : タイルごとに手前から順に α ブレンディングする
+  1. project_gaussians : project the 3D Gaussians onto the screen as 2D Gaussians (center μ', covariance Σ')
+  2. bin_tiles         : divide the screen into tiles of tile×tile pixels, enumerate the tiles each Gaussian covers,
+                         and sort with (tile index, depth) as the key
+  3. composite         : α-blend front to back within each tile
                              C = Σ_i c_i α_i T_i ,   T_i = Π_{j<i} (1 - α_j)
 """
 
@@ -17,14 +18,14 @@ import functools
 import torch
 from torch.utils.checkpoint import checkpoint
 
-ALPHA_MIN = 1.0 / 255.0  # これ未満の α は寄与なしとして捨てる（公式実装と同じ）
-ALPHA_MAX = 0.99         # α=1 だと 1-α=0 で後ろへの勾配が消えるので上限を置く（公式実装と同じ）
+ALPHA_MIN = 1.0 / 255.0  # α below this is discarded as no contribution (same as the official implementation)
+ALPHA_MAX = 0.99         # with α=1, 1-α=0 and the gradient to what lies behind vanishes, so set an upper limit (same as official)
 
 
-# ============================================================ 1. 3D -> 2D 投影
+# ============================================================ 1. 3D -> 2D projection
 
 def quat_to_rotmat(q):
-    """正規化済みクォータニオン (N,4) [w,x,y,z] -> 回転行列 (N,3,3)"""
+    """Normalized quaternions (N,4) [w,x,y,z] -> rotation matrices (N,3,3)"""
     w, x, y, z = q.unbind(-1)
     return torch.stack([
         1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y),
@@ -34,30 +35,30 @@ def quat_to_rotmat(q):
 
 
 def covariance_3d(scales, quats):
-    """3D 共分散 Σ = R S Sᵀ Rᵀ（論文 式(6)）。
+    """3D covariance Σ = R S Sᵀ Rᵀ (paper Eq. (6)).
 
-    Σ の 6 成分を直接最適化すると半正定値性が崩れうるので、
-    軸ごとの標準偏差 s（S = diag(s)）と回転 q に分解して持つ。
+    Optimizing the 6 components of Σ directly can break positive semi-definiteness, so it is stored
+    factored into the per-axis standard deviations s (S = diag(s)) and a rotation q.
     """
-    M = quat_to_rotmat(quats) * scales[:, None, :]  # R @ diag(s)：R の各列に s を掛ける
+    M = quat_to_rotmat(quats) * scales[:, None, :]  # R @ diag(s): multiply each column of R by s
     return M @ M.transpose(1, 2)
 
 
 def project_gaussians(means, cov3d, cam):
-    """3D ガウシアンを画面へ投影する（EWA splatting、論文 式(5)）。
+    """Project 3D Gaussians onto the screen (EWA splatting, paper Eq. (5)).
 
-    透視投影 (x,y,z) -> (fx x/z + cx, fy y/z + cy) は非線形なので、ガウシアン中心のまわりで
-    一次近似（ヤコビアン J）すると、ガウシアンはまたガウシアンに写る:
-        Σ' = J W Σ Wᵀ Jᵀ     （W：ワールド→カメラの回転）
+    The perspective projection (x,y,z) -> (fx x/z + cx, fy y/z + cy) is nonlinear, so it is approximated to first
+    order around the Gaussian center (Jacobian J). A Gaussian then maps to a Gaussian again:
+        Σ' = J W Σ Wᵀ Jᵀ     (W: world-to-camera rotation)
 
     Returns
-        means2d (N,2) 画素座標, cov2d (N,2,2), depth (N,) カメラ座標の z
+        means2d (N,2) pixel coordinates, cov2d (N,2,2), depth (N,) z in camera coordinates
     """
     p = means @ cam.R.T + cam.t
     x, y, z = p.unbind(-1)
 
-    # 画面外に大きくはみ出したガウシアンで J が極端にならないよう、
-    # 視野の 1.3 倍の範囲にクランプしてから J を作る（公式実装と同じ）
+    # So that J does not become extreme for Gaussians that extend far off screen,
+    # clamp to 1.3 times the field of view before building J (same as the official implementation)
     lim_x = 1.3 * 0.5 * cam.W / cam.fx
     lim_y = 1.3 * 0.5 * cam.H / cam.fy
     tx = (x / z).clamp(-lim_x, lim_x) * z
@@ -70,7 +71,7 @@ def project_gaussians(means, cov3d, cam):
     ], -1).reshape(-1, 2, 3)
     JW = J @ cam.R
     cov2d = JW @ cov3d @ JW.transpose(1, 2)
-    # 1 画素より細くならないようにする簡易ローパス（公式実装と同じ +0.3）
+    # Simple low-pass so that nothing gets thinner than 1 pixel (same +0.3 as the official implementation)
     cov2d = cov2d + 0.3 * torch.eye(2, device=cov2d.device)
 
     means2d = torch.stack([cam.fx * x / z + cam.cx, cam.fy * y / z + cam.cy], -1)
@@ -78,15 +79,17 @@ def project_gaussians(means, cov3d, cam):
 
 
 def conic_and_radius(cov2d, opacity=None):
-    """2D 共分散の逆行列（conic）と、画面上の影響半径 [px] を求める。
+    """Compute the inverse of the 2D covariance (conic) and the screen-space radius of influence [px].
 
-    conic は対称 2x2 行列 Σ'^{-1} の (00, 01, 11) 成分。
-    半径は Σ' の大きい方の固有値 λ から 3√λ（公式実装と同じ。タイル割り当てにだけ使うので勾配不要）。
+    conic is the (00, 01, 11) components of the symmetric 2x2 matrix Σ'^{-1}.
+    The radius is 3√λ from the larger eigenvalue λ of Σ' (same as the official implementation. It is used only
+    for tile assignment, so no gradient is needed).
 
-    opacity を渡すと、半径を「α = o·exp(-½ r²/λ) が ALPHA_MIN を下回る距離」でも打ち切った
-    tile_radius も返す。それより外側の画素では α < 1/255 で結局捨てられるので、描画結果は
-    3√λ で割り当てた場合と厳密に同じまま、計算する (交差 × 画素) の数だけが減る。
-    （不透明度が低いうちは大きな差になる。opacity reset 直後の o=0.01 なら半径は約 1/2）
+    If opacity is given, also returns tile_radius, where the radius is additionally cut off at "the distance
+    at which α = o·exp(-½ r²/λ) falls below ALPHA_MIN". Pixels farther out have α < 1/255 and are discarded
+    anyway, so the rendered result stays exactly the same as when assigning with 3√λ, and only the number of
+    (intersection × pixel) pairs computed goes down.
+    (The difference is large while opacity is low. With o=0.01 right after an opacity reset, the radius is about 1/2.)
     """
     a, b, c = cov2d[:, 0, 0], cov2d[:, 0, 1], cov2d[:, 1, 1]
     det = a * c - b * b
@@ -102,10 +105,10 @@ def conic_and_radius(cov2d, opacity=None):
     return conic, radius, tile_radius
 
 
-# ============================================================ 2. タイル割り当てとソート
+# ============================================================ 2. tile assignment and sorting
 
 def _tile_rect(means2d, radius, tiles_x, tiles_y, tile):
-    """各ガウシアンの 3σ 外接矩形が覆うタイル範囲 [x0, x1) × [y0, y1)"""
+    """Tile range [x0, x1) × [y0, y1) covered by the 3σ bounding rectangle of each Gaussian"""
     u, v = means2d[:, 0], means2d[:, 1]
     x0 = ((u - radius) / tile).floor().clamp(0, tiles_x).long()
     x1 = ((u + radius) / tile).floor().add(1).clamp(0, tiles_x).long()
@@ -116,110 +119,114 @@ def _tile_rect(means2d, radius, tiles_x, tiles_y, tile):
 
 @torch.no_grad()
 def bin_tiles(means2d, radius, depth, W, H, tile):
-    """(ガウシアン, タイル) の交差を列挙し、タイル番号→深度の順に並べる。
+    """Enumerate the (Gaussian, tile) intersections and order them by tile index, then depth.
 
-    公式実装はキー = [タイル番号 | 深度] の 64bit 整数を基数ソートする。ここでも同じく
-    キー = タイル番号 * N + 深度の順位 を作って 1 回ソートする。
+    The official implementation radix-sorts 64-bit integer keys = [tile index | depth]. Likewise, here we build
+    key = tile index * N + depth rank and sort once.
 
     Returns
-        gid      (M,) 各交差のガウシアン番号（タイル内では手前から順）
-        tile_id  (M,) 各交差のタイル番号（昇順）
-        on_screen (N,) 1 タイル以上を覆うか
+        gid      (M,) Gaussian index of each intersection (front to back within a tile)
+        tile_id  (M,) tile index of each intersection (ascending)
+        on_screen (N,) whether it covers at least 1 tile
         tiles_x, tiles_y
     """
     tiles_x = (W + tile - 1) // tile
     tiles_y = (H + tile - 1) // tile
     x0, x1, y0, y1 = _tile_rect(means2d.detach(), radius, tiles_x, tiles_y, tile)
-    n = (x1 - x0) * (y1 - y0) * (radius > 0)  # 覆うタイル数（画面外・半径 0 なら 0）
+    n = (x1 - x0) * (y1 - y0) * (radius > 0)  # number of tiles covered (0 if off screen or radius 0)
 
     N = means2d.shape[0]
     ar = torch.arange(N, device=means2d.device)
-    gid = torch.repeat_interleave(ar, n)                # ガウシアン i を n_i 回繰り返す
+    gid = torch.repeat_interleave(ar, n)                # repeat Gaussian i n_i times
     k = torch.arange(gid.numel(), device=gid.device) - (torch.cumsum(n, 0) - n)[gid]
-    w = (x1 - x0)[gid]                                  # 矩形の幅（タイル数）
+    w = (x1 - x0)[gid]                                  # width of the rectangle (in tiles)
     tile_id = (y0[gid] + k // w) * tiles_x + (x0[gid] + k % w)
 
     rank = torch.empty_like(ar)
-    rank[torch.argsort(depth.detach())] = ar            # 深度の順位（0 が最も手前）
+    rank[torch.argsort(depth.detach())] = ar            # depth rank (0 is the nearest)
     order = torch.argsort(tile_id * N + rank[gid])
     return gid[order], tile_id[order], n > 0, tiles_x, tiles_y
 
 
-# ============================================================ 3. α ブレンディング
+# ============================================================ 3. α blending
 
 class SegmentedExclusiveCumsum(torch.autograd.Function):
-    """区間ごとにリセットされる「自分を含まない」累積和。
+    """Cumulative sum "not including itself" that is reset per segment.
 
-    x (P, M) を行優先で 1 列に並べたものを区間に区切り（区間は行をまたがない）、
+    x (P, M) is laid out in row-major order as one sequence and divided into segments (a segment does not span
+    rows). Returns
         y[p, m] = Σ_{start(m) <= j < m} x[p, j]
-    を返す。start(m), end(m) は m が属する区間の先頭・末尾の列番号。
+    where start(m), end(m) are the first and last column indices of the segment that m belongs to.
 
-    前向き: 全体の累積和を 1 回とり（1 次元なので GPU の並列スキャンが使える）、区間先頭の値を引く。
-    逆向き: この線形写像の転置（随伴）は「区間ごとの逆向き累積和」
+    Forward: take one cumulative sum over everything (it is 1-D, so the GPU's parallel scan can be used), then
+    subtract the value at the segment start.
+    Backward: the transpose (adjoint) of this linear map is a "per-segment reverse cumulative sum"
         ∂L/∂x[p, j] = Σ_{j < m <= end(j)} ∂L/∂y[p, m]
-    で、前向きと同じやり方で計算できる。
-    autograd に任せると「区間先頭の値を引く」部分の逆伝播が float64 の atomicAdd になり、
-    それを持たない古い GPU（Maxwell 等）ではとても遅いので、逆伝播を手で書いている。
-    全体の累積和は大きな値になるので、桁落ちを避けて float64 で計算する。
+    which can be computed in the same way as the forward pass.
+    If left to autograd, the backward of the "subtract the value at the segment start" part becomes a float64
+    atomicAdd, which is very slow on old GPUs that lack it (Maxwell etc.), so the backward pass is written by hand.
+    The global cumulative sum becomes large, so it is computed in float64 to avoid loss of significance.
     """
 
     @staticmethod
     def forward(ctx, x, seg_start, seg_end):
         ctx.save_for_backward(seg_start, seg_end)
         P, M = x.shape
-        excl = torch.cumsum(x.double().reshape(-1), 0).reshape(P, M) - x   # 先頭から自分の手前までの和
+        excl = torch.cumsum(x.double().reshape(-1), 0).reshape(P, M) - x   # sum from the start up to just before itself
         return (excl - excl.index_select(1, seg_start)).to(x.dtype)
 
     @staticmethod
     def backward(ctx, g):
         seg_start, seg_end = ctx.saved_tensors
         P, M = g.shape
-        rev = torch.cumsum(g.double().reshape(-1).flip(0), 0).flip(0).reshape(P, M) - g  # 自分の後ろから末尾までの和
+        rev = torch.cumsum(g.double().reshape(-1).flip(0), 0).flip(0).reshape(P, M) - g  # sum from just after itself to the end
         return (rev - rev.index_select(1, seg_end)).to(g.dtype), None, None
 
 
 @functools.lru_cache(maxsize=None)
 def _pixel_offsets(tile, device):
-    """タイル左上から見た各画素中心の座標 (tile*tile, 2)。並びは行優先 (ly, lx)。"""
+    """Coordinates of each pixel center seen from the tile's top-left (tile*tile, 2). Order is row-major (ly, lx)."""
     ly, lx = torch.meshgrid(torch.arange(tile), torch.arange(tile), indexing="ij")
     return (torch.stack([lx, ly], -1).reshape(-1, 2).float() + 0.5).to(device)
 
 
 def composite(means2d, conic, opacity, color, tile_xy, tile_local, counts, tile):
-    """連続したタイル群（チャンク）の α ブレンディング。
+    """α-blending of a run of consecutive tiles (a chunk).
 
-    入力はすべて「交差」単位（M 個）で、タイル番号→深度の順に並んでいる。
-        means2d (M,2), conic (M,3), opacity (M,), color (M,C)  C は色なら 3（法線などの特徴量も同じように合成できる）
-        tile_xy (M,2) その交差のタイル左上の画素座標
-        tile_local (M,) チャンク内のタイル番号 0..n_tiles-1（昇順）
-        counts (n_tiles,) 各タイルの交差数
-    タイル内の全画素 (P = tile*tile 個) と交差 m の組を (P, M) のテンソルとして一度に計算する。
+    All inputs are per "intersection" (M of them), ordered by tile index, then depth.
+        means2d (M,2), conic (M,3), opacity (M,), color (M,C)  C is 3 for color (features such as normals can be
+                                                               composited in the same way)
+        tile_xy (M,2) pixel coordinates of the top-left of that intersection's tile
+        tile_local (M,) tile index within the chunk 0..n_tiles-1 (ascending)
+        counts (n_tiles,) number of intersections of each tile
+    The pairs of all pixels in a tile (P = tile*tile of them) and intersection m are computed at once
+    as a (P, M) tensor.
 
     Returns
         rgb (n_tiles, P, C)   Σ c_i α_i T_i
-        T_final (n_tiles, P)  全ガウシアン通過後の透過率（背景色の重み）
+        T_final (n_tiles, P)  transmittance after passing all Gaussians (weight of the background color)
     """
     P = tile * tile
     offs = _pixel_offsets(tile, means2d.device)
-    dx = offs[:, 0:1] + (tile_xy[:, 0] - means2d[:, 0])[None]   # (P, M) 画素 - 中心
+    dx = offs[:, 0:1] + (tile_xy[:, 0] - means2d[:, 0])[None]   # (P, M) pixel - center
     dy = offs[:, 1:2] + (tile_xy[:, 1] - means2d[:, 1])[None]
 
-    # α = o · exp(-½ dᵀ Σ'^{-1} d)   （論文 式(2)(3) の 2D 版）
+    # α = o · exp(-½ dᵀ Σ'^{-1} d)   (2D version of paper Eqs. (2)(3))
     A, B, C = conic[:, 0], conic[:, 1], conic[:, 2]
     power = -0.5 * (A * dx * dx + C * dy * dy) - B * dx * dy
     alpha = (opacity * torch.exp(power)).clamp(max=ALPHA_MAX)
     alpha = torch.where(alpha >= ALPHA_MIN, alpha, 0.0)
 
-    # 透過率 T_i = Π_{j<i}(1-α_j) を「画素ごと・タイル内での」累積積として求める。
-    # (P, M) の各行（= 画素）で、同じタイルの交差は手前から順に連続して並んでいるので、
-    # log 空間で「タイルの区間ごとにリセットされる累積和」をとれば log T_i になる。
+    # Compute the transmittance T_i = Π_{j<i}(1-α_j) as a cumulative product "per pixel, within a tile".
+    # In each row (= pixel) of (P, M), the intersections of the same tile are contiguous and ordered front to back,
+    # so taking a "cumulative sum that is reset per tile segment" in log space gives log T_i.
     log1m = torch.log1p(-alpha)                                       # log(1-α) <= 0
     starts = torch.cumsum(counts, 0) - counts
     T = torch.exp(SegmentedExclusiveCumsum.apply(
         log1m, starts[tile_local], (starts + counts - 1)[tile_local]))  # (P, M)
 
     n_tiles = counts.shape[0]
-    weight = alpha * T                                                # 各ガウシアンの寄与 α_i T_i
+    weight = alpha * T                                                # contribution of each Gaussian α_i T_i
     rgb = torch.zeros(P, n_tiles, color.shape[-1], device=weight.device).index_add(
         1, tile_local, weight[..., None] * color[None])
     log_T = torch.zeros(P, n_tiles, device=weight.device).index_add(1, tile_local, log1m)
@@ -227,7 +234,7 @@ def composite(means2d, conic, opacity, color, tile_xy, tile_local, counts, tile)
 
 
 def _chunks(counts, cap):
-    """タイルを、交差数の合計が cap 以下になる連続区間に分ける -> [(t0, t1), ...]"""
+    """Split the tiles into contiguous ranges whose total intersection count is at most cap -> [(t0, t1), ...]"""
     bounds, acc = [0], 0
     for t, c in enumerate(counts):
         if acc > 0 and acc + c > cap:
@@ -240,23 +247,24 @@ def _chunks(counts, cap):
 
 def rasterize(means2d, conic, opacity, color, radius, depth, W, H, bg,
               tile=16, max_entries=2 ** 25):
-    """2D ガウシアン群を画像にする。radius はタイル割り当てに使う半径 [px]。
+    """Turn a set of 2D Gaussians into an image. radius is the radius [px] used for tile assignment.
 
-    max_entries: 一度に作る (画素 × 交差) テンソルの要素数の上限。超える場合はタイルを
-    いくつかのチャンクに分けて順に処理し、各チャンクは gradient checkpointing で
-    逆伝播時に再計算する（中間テンソルを全部覚えておくと VRAM が足りないため）。
-    1 要素あたり、逆伝播用の保存分と一時領域を合わせて 60〜70 バイト程度使う。
+    max_entries: upper limit on the number of elements of the (pixel × intersection) tensor built at once. If it is
+    exceeded, the tiles are split into several chunks and processed in turn, and each chunk is recomputed during
+    backpropagation with gradient checkpointing (keeping all intermediate tensors would not fit in VRAM).
+    Each element uses about 60-70 bytes, counting what is saved for backpropagation and temporary storage.
 
-    color は (N,C)。bg は長さ C（またはスカラー）。
+    color is (N,C). bg has length C (or is a scalar).
 
     Returns
-        image (H,W,C), alpha (H,W) 累積不透明度, on_screen (N,)
+        image (H,W,C), alpha (H,W) accumulated opacity, on_screen (N,)
     """
     gid, tile_id, on_screen, tiles_x, tiles_y = bin_tiles(means2d, radius, depth, W, H, tile)
     n_tiles = tiles_x * tiles_y
     P = tile * tile
 
-    # 交差ごとに属性を集める（ここは微分可能：勾配は元のガウシアンに足し込まれる）
+    # Gather the attributes per intersection
+    # (this is differentiable: gradients are accumulated into the original Gaussians)
     m2, cn, op, col = means2d[gid], conic[gid], opacity[gid], color[gid]
     tile_xy = torch.stack([tile_id % tiles_x, tile_id // tiles_x], -1).float() * tile
 
@@ -276,7 +284,7 @@ def rasterize(means2d, conic, opacity, color, radius, depth, W, H, bg,
     rgb = torch.cat(rgbs)
     T = torch.cat(Ts)
 
-    rgb = rgb + T[..., None] * bg  # 残った透過率のぶん背景が見える
+    rgb = rgb + T[..., None] * bg  # the background shows through by the amount of remaining transmittance
 
     def to_image(x):  # (tiles_y*tiles_x, P, C) -> (H, W, C)
         C = x.shape[-1]
@@ -288,13 +296,14 @@ def rasterize(means2d, conic, opacity, color, radius, depth, W, H, bg,
     return image, alpha, on_screen
 
 
-# ============================================================ テスト用の素朴な実装
+# ============================================================ naive implementation for testing
 
 def rasterize_dense_reference(means2d, conic, opacity, color, radius, depth, W, H, bg, tile=16):
-    """全ガウシアン × 全画素を愚直に計算して手前から合成する（rasterize の検算用）。
+    """Compute all Gaussians × all pixels by brute force and composite front to back (for checking rasterize).
 
-    タイル化・ソート・log 空間の累積和を使わず、教科書どおり cumprod で T_i を求める。
-    ただし「3σ 矩形が覆うタイルの画素にだけ寄与する」という打ち切り規則は rasterize と揃える。
+    Does not use tiling, sorting or the log-space cumulative sum, and computes T_i with cumprod as in the textbook.
+    However, the cutoff rule "contributes only to the pixels of tiles covered by the 3σ rectangle" is kept the same
+    as in rasterize.
     """
     order = torch.argsort(depth.detach())
     means2d, conic, opacity, color, radius = (x[order] for x in (means2d, conic, opacity, color, radius))

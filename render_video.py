@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-学習済みガウシアンで、物体のまわりを一周する新規視点画像を描画する。
+Render novel-view images that go once around the object, with trained Gaussians.
 
     python render_video.py --ckpt logs/toy/ckpt_007000.pt --gif
 """
@@ -24,7 +24,7 @@ def main():
     ap.add_argument("--n-frames", type=int, default=60)
     ap.add_argument("--elevation", type=float, default=30.0)
     ap.add_argument("--radius", type=float, default=4.0)
-    ap.add_argument("--scale", type=float, default=1.0, help="学習画像に対する解像度の倍率")
+    ap.add_argument("--scale", type=float, default=1.0, help="resolution scale relative to the training images")
     ap.add_argument("--gif", action="store_true")
     args = ap.parse_args()
 
@@ -34,7 +34,7 @@ def main():
     W = round(ckpt["camera"]["W"] * args.scale)
     H = round(ckpt["camera"]["H"] * args.scale)
     focal = ckpt["camera"]["focal"] * args.scale
-    print(f"ガウシアン数 {len(model)}, {W}x{H}")
+    print(f"Gaussians {len(model)}, {W}x{H}")
 
     out_dir = Path(args.ckpt).parent / "orbit"
     out_dir.mkdir(exist_ok=True)
@@ -53,7 +53,7 @@ def main():
             frames.append(frame)
 
     t = sorted(times)[len(times) // 2]
-    print(f"描画 {t * 1000:.1f} ms/枚（中央値, {1 / t:.0f} fps） -> {out_dir}")
+    print(f"render {t * 1000:.1f} ms/image (median, {1 / t:.0f} fps) -> {out_dir}")
     if args.gif:
         imageio.mimsave(out_dir / "orbit.gif", frames, duration=1000 / 30, loop=0)
         print(f"GIF -> {out_dir / 'orbit.gif'}")

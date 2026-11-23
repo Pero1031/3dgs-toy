@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-3D Gaussian Splatting の学習。
+Training of 3D Gaussian Splatting.
 
     python train.py --datadir data/toy_sphere --expname toy --iters 7000
 
-logs/<expname>/ に val 画像（左: 正解 / 右: 描画）、log.csv、チェックポイント、
-公式形式の point_cloud.ply を出力する。
+Outputs val images (left: ground truth / right: render), log.csv, checkpoints and
+a point_cloud.ply in the official format to logs/<expname>/.
 """
 
 import argparse
@@ -24,7 +24,8 @@ from gs.render import render
 
 
 def scene_extent(cams):
-    """カメラ中心群の広がり（公式実装の getNerfppNorm と同じ）。学習率や大きさの閾値の基準になる。"""
+    """Spread of the camera centers (same as getNerfppNorm of the official implementation).
+    It is the reference for learning rates and size thresholds."""
     c = torch.stack([cam.center for cam in cams])
     return 1.1 * (c - c.mean(0)).norm(dim=1).max().item()
 
@@ -56,25 +57,26 @@ def main():
     ap.add_argument("--half-res", action="store_true")
     ap.add_argument("--black-bkgd", action="store_true")
     ap.add_argument("--bg", type=float, nargs=3, default=None, metavar=("R", "G", "B"),
-                    help="背景色 [0,1]。既定は白（--black-bkgd なら黒）")
+                    help="background color [0,1]. Default is white (black with --black-bkgd)")
     ap.add_argument("--sh-degree", type=int, default=3)
-    # 初期化（合成データ用：立方体内のランダム点）
+    # Initialization (for synthetic data: random points inside a cube)
     ap.add_argument("--init-points", type=int, default=20000)
-    ap.add_argument("--init-extent", type=float, default=2.0, help="初期点を置く立方体の半辺長")
+    ap.add_argument("--init-extent", type=float, default=2.0, help="half side length of the cube in which the initial points are placed")
     ap.add_argument("--init-center", type=float, nargs=3, default=(0.0, 0.0, 0.0), metavar=("X", "Y", "Z"))
-    # densification（既定値は公式実装と同じ。densify_until だけ既定で iters/2 にしている）
+    # densification (defaults are the same as the official implementation.
+    # Only densify_until defaults to iters/2)
     ap.add_argument("--densify-from", type=int, default=500)
     ap.add_argument("--densify-until", type=int, default=None)
     ap.add_argument("--densify-interval", type=int, default=100)
     ap.add_argument("--opacity-reset", type=int, default=3000)
     ap.add_argument("--grad-thresh", type=float, default=0.0002)
     ap.add_argument("--min-opacity", type=float, default=0.005)
-    ap.add_argument("--max-screen-size", type=float, default=20, help="これより大きく映るものを prune [px]。0 で無効")
+    ap.add_argument("--max-screen-size", type=float, default=20, help="prune those that appear larger than this [px]. 0 disables")
     ap.add_argument("--lambda-ssim", type=float, default=0.2)
-    # ラスタライザ
-    ap.add_argument("--tile", type=int, default=8, help="タイルの一辺 [px]（公式は 16。PyTorch 版は 8 の方が速い）")
-    ap.add_argument("--max-entries", type=int, default=2 ** 25, help="VRAM 不足なら下げる")
-    # ログ
+    # Rasterizer
+    ap.add_argument("--tile", type=int, default=8, help="side of a tile [px] (the official one uses 16. 8 is faster for the PyTorch version)")
+    ap.add_argument("--max-entries", type=int, default=2 ** 25, help="lower this if VRAM runs out")
+    # Logging
     ap.add_argument("--i-print", type=int, default=100)
     ap.add_argument("--i-val", type=int, default=1000)
     ap.add_argument("--seed", type=int, default=0)
@@ -90,7 +92,7 @@ def main():
     extent = scene_extent(train_cams)
     densify_until = args.iters // 2 if args.densify_until is None else args.densify_until
     H, W = train_cams[0].H, train_cams[0].W
-    print(f"train {len(train_cams)} 枚 ({W}x{H}), val {len(val_cams)} 枚, extent={extent:.2f}")
+    print(f"train {len(train_cams)} images ({W}x{H}), val {len(val_cams)} images, extent={extent:.2f}")
 
     model = GaussianModel(args.sh_degree)
     model.init_random(args.init_points, args.init_extent, dev, center=args.init_center)
@@ -106,7 +108,7 @@ def main():
     sh_degree, order, t_start = 0, [], time.time()
     for it in range(1, args.iters + 1):
         model.update_lr(it, args.iters)
-        if it % 1000 == 0:  # SH の次数を 1000 iter ごとに上げる（まず拡散色を合わせてから視点依存へ）
+        if it % 1000 == 0:  # raise the SH degree every 1000 iters (fit the diffuse color first, then view dependence)
             sh_degree = min(sh_degree + 1, args.sh_degree)
         if not order:
             order = torch.randperm(len(train_cams)).tolist()
@@ -151,10 +153,10 @@ def main():
                 "camera": {"W": W, "H": H, "focal": train_cams[0].fx}, "args": vars(args)},
                logdir / f"ckpt_{args.iters:06d}.pt")
     model.save_ply(logdir / "point_cloud.ply")
-    print(f"学習時間 {(time.time() - t_start) / 60:.1f} 分, ガウシアン数 {len(model)}")
+    print(f"training time {(time.time() - t_start) / 60:.1f} min, Gaussians {len(model)}")
     if test_cams:
         p, sec = evaluate(model, test_cams, bg, sh_degree, args, logdir / "test_000.png")
-        print(f"test PSNR {p:.2f} dB, 描画 {sec * 1000:.1f} ms/枚")
+        print(f"test PSNR {p:.2f} dB, render {sec * 1000:.1f} ms/image")
 
 
 if __name__ == "__main__":

@@ -752,13 +752,13 @@
   }
  },
  "summary_test_psnr_Lp0": {
-  "点ごとの SH（参考、最良の次数）": 25.273064108574683,
-  "材質の粗さだけ（全点で共通のぼけ）": 24.204422433128943,
-  "測ったばらつきから換算（半径 0.68 mm）": 24.395760158216735,
-  "測ったばらつきから換算（半径 1.36 mm）": 24.40173751772534,
-  "測ったばらつきから換算（半径 2.72 mm）": 23.909362698030414,
-  "測ったばらつきから換算（半径 4 mm）": 23.530383060390278,
-  "点ごとに最適化した粗さ": 24.585250330280083
+  "Per-point SH (reference, best degree)": 25.273064108574683,
+  "Material roughness only (same blur for all points)": 24.204422433128943,
+  "Converted from the measured variation (radius 0.68 mm)": 24.395760158216735,
+  "Converted from the measured variation (radius 1.36 mm)": 24.40173751772534,
+  "Converted from the measured variation (radius 2.72 mm)": 23.909362698030414,
+  "Converted from the measured variation (radius 4 mm)": 23.530383060390278,
+  "Per-point optimized roughness": 24.585250330280083
  },
  "summary_test_psnr_Lp2": {
   "material": 25.33081057184116,

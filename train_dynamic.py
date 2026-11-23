@@ -1,25 +1,30 @@
 # -*- coding: utf-8 -*-
 """
-動くシーンの 3D Gaussian Splatting（4DGS の最小版）。表現は 3 通り:
+3D Gaussian Splatting for dynamic scenes (a minimal 4DGS). There are 3 representations:
 
-    既定         基準の形のガウシアン 1 組と、時刻ごとにそれをずらす MLP（gs/deform.py）を同時に学習する
-                 （Deformable 3D Gaussians の簡略版）
-    --spacetime  各ガウシアンが自分の時刻・時間幅・速度を持つ（gs/spacetime.py。Spacetime Gaussians の簡略版）
-    --trajectory 各ガウシアンが時刻の節点ごとの位置を持つ（--knots-init 3 で、時間の順に追跡しながら学習する）
-                 （gs/trajectory.py。Dynamic 3D Gaussians の簡略版）
+    default      jointly trains one set of Gaussians in the canonical shape and an MLP that offsets it per time
+                 (gs/deform.py)
+                 (a simplified version of Deformable 3D Gaussians)
+    --spacetime  each Gaussian has its own time, temporal width and velocity
+                 (gs/spacetime.py. A simplified version of Spacetime Gaussians)
+    --trajectory each Gaussian has a position per time knot (with --knots-init 3, it trains while tracking in time order)
+                 (gs/trajectory.py. A simplified version of Dynamic 3D Gaussians)
 
-データは D-NeRF 形式（transforms_*.json の各フレームに "time"）。
+Data is in D-NeRF format ("time" in each frame of transforms_*.json).
 
     python make_toy_dynamic.py
     python train_dynamic.py --datadir data/toy_dynamic --expname dyn_toy --iters 5000 --warm-up 1000
-    python train_dynamic.py --datadir data/toy_dynamic --expname dyn_toy_static --iters 5000 --static   # 比較用
+    python train_dynamic.py --datadir data/toy_dynamic --expname dyn_toy_static --iters 5000 --static   # for comparison
 
     python train_dynamic.py --datadir data/toy_dynamic --expname dyn_toy_st --iters 5000 --spacetime
 
-    --static   変形なし（時刻を無視するふつうの 3DGS）。同じ手順・同じ評価で比べるため
-    --warm-up  はじめの何回かは変形なしで学習し、おおまかな形ができてから MLP を動かす（論文は 3000 / 40000）
+    --static   no deformation (ordinary 3DGS that ignores time). For comparison with the same procedure and the
+               same evaluation
+    --warm-up  train without deformation for the first iterations, and start the MLP once a rough shape has formed
+               (the paper uses 3000 / 40000)
 
-logs/<expname>/ に test 画像（上: 正解 / 下: 描画）、時刻を動かした GIF、log.csv、eval.json、チェックポイントを出力する。
+Outputs test images (top: ground truth / bottom: render), a GIF that sweeps time, log.csv, eval.json and
+a checkpoint to logs/<expname>/.
 """
 
 import argparse
@@ -47,7 +52,8 @@ from train import scene_extent, to_u8
 
 
 def render_at(model, net, cam, t, bg, sh_degree, args):
-    """時刻 t の形で描画する（--spacetime / --trajectory は自分でずれを出す。それ以外で net が None なら変形なし）"""
+    """Render in the shape at time t (--spacetime / --trajectory produce the offsets themselves.
+    Otherwise, no deformation if net is None)"""
     if isinstance(model, (SpacetimeModel, TrajectoryModel)):
         delta = model.delta_at(t)
     else:
@@ -58,27 +64,29 @@ def render_at(model, net, cam, t, bg, sh_degree, args):
 
 
 def velocity_smoothness(model, net, out, t, n_anchor=1024, k=8, tau=0.02, eps=0.02):
-    """近くのガウシアンの速度をそろえる損失: 速度の差の 2 乗 / 距離の 2 乗（＝速度場の勾配の 2 乗）の平均。
+    """Loss that aligns the velocities of nearby Gaussians: mean of squared velocity difference / squared distance
+    (= the squared gradient of the velocity field).
 
-    一様な色の面の上では、面に沿って滑っても画像が変わらないので、画像の誤差だけでは動きが決まらない。
-    模様や縁のある所で決まった動きを、まわりへ広げる（オプティカルフローの Horn–Schunck の滑らかさの項と
-    同じ考え。距離を保つ ARAP と違い、一様に膨らむ・縮む動きもほとんど罰しない）。
-    その時刻に描いたガウシアンから n_anchor 個を選び、それぞれの近傍 k 個と比べる。
+    On a uniformly colored surface, sliding along the surface does not change the image, so the image error alone
+    does not determine the motion. This spreads the motion determined where there are patterns or edges to the
+    surroundings (the same idea as the Horn–Schunck smoothness term in optical flow. Unlike ARAP, which preserves
+    distances, it also barely penalizes uniformly expanding or shrinking motion).
+    Picks n_anchor of the Gaussians rendered at that time and compares each with its k nearest neighbors.
     """
     ids, delta = out["ids"], out["delta"]
     if len(ids) <= k:
         return torch.zeros((), device=ids.device)
-    x = (model.params["means"] + delta["means"])[ids].detach()          # 時刻 t の位置
+    x = (model.params["means"] + delta["means"])[ids].detach()          # position at time t
     a = torch.randint(len(ids), (min(n_anchor, len(ids)),), device=x.device)
     d, nb = torch.cdist(x[a], x).topk(k + 1, dim=1, largest=False)
-    d, nb = d[:, 1:], nb[:, 1:]                                          # 先頭は自分自身
+    d, nb = d[:, 1:], nb[:, 1:]                                          # the first one is the point itself
     if isinstance(model, SpacetimeModel):
         v = model.params["velocity"][ids]
         va, vn = v[a], v[nb]
     elif isinstance(model, TrajectoryModel):
         v = model.velocity_at(t)[ids]
         va, vn = v[a], v[nb]
-    else:   # 変形場: τ だけ離れた時刻との位置の差を速度とみなす
+    else:   # deformation field: the position difference to a time τ away is taken as the velocity
         tau = tau if t + tau <= 1.0 else -tau
         pts = ids[torch.cat([a, nb.flatten()])]
         v = (net(model.params["means"][pts].detach(), t + tau)["means"] - delta["means"][pts]) / tau
@@ -87,13 +95,16 @@ def velocity_smoothness(model, net, out, t, n_anchor=1024, k=8, tau=0.02, eps=0.
 
 
 def track_loss(model, net, out, cam, cam2, orbit, n=4096, tol=0.1):
-    """正解の動きから作った「誤りのない 2D 追跡」に合わせる損失（make_toy_dynamic.py のデータ専用）。
+    """Loss that fits an "error-free 2D track" built from the ground-truth motion (only for make_toy_dynamic.py data).
 
-    実際の単眼の手法は、学習済みの点追跡モデルの出力（同じ点が別のフレームのどの画素に写るか）を損失に入れる。
-    おもちゃデータは動きの式が分かるので、その追跡が完全に正しい場合の上限を測れる。
-    時刻 t に面の近く（|符号付き距離| < tol）にあって、カメラから見える側にあるガウシアンについて、
-    別のフレーム cam2 の時刻でのそのガウシアンの位置を cam2 に投影し、正解の移動先の投影と比べる。
-    比べるのは画面上の位置だけなので、cam2 の視線方向のずれは罰しない（2D の追跡と同じ）。
+    Real monocular methods put the output of a pretrained point-tracking model (which pixel of another frame the same
+    point appears at) into the loss. For the toy data the formula of the motion is known, so we can measure the upper
+    bound for the case where that tracking is perfectly correct.
+    For Gaussians that are near a surface at time t (|signed distance| < tol) and on the side visible from the camera,
+    the position of that Gaussian at the time of another frame cam2 is projected into cam2 and compared with the
+    projection of the ground-truth destination.
+    Only the on-screen position is compared, so an offset along the viewing direction of cam2 is not penalized
+    (same as 2D tracking).
     """
     ids = out["ids"]
     if len(ids) == 0:
@@ -104,7 +115,7 @@ def track_loss(model, net, out, cam, cam2, orbit, n=4096, tol=0.1):
     f32 = lambda v: torch.as_tensor(v, dtype=torch.float32, device=x0.device)
     (c0, r0, b0), (c1, r1, b1) = [[f32(v) for v in toy.scene(c.time, orbit)] for c in (cam, cam2)]
 
-    # いちばん近い物体と、その面の法線・正解の移動先
+    # The nearest object, the normal of its surface, and the ground-truth destination
     rel_s, rel_b = x0 - c0, x0 - b0
     q = rel_b.abs() - toy.BOX_H
     d_s = rel_s.norm(dim=1) - r0
@@ -124,7 +135,7 @@ def track_loss(model, net, out, cam, cam2, orbit, n=4096, tol=0.1):
 
     def project(x):
         p = x @ cam2.R.T + cam2.t
-        return p[:, :2] / p[:, 2:3].clamp(min=1e-3)     # 焦点距離で割った画面座標
+        return p[:, :2] / p[:, 2:3].clamp(min=1e-3)     # screen coordinates divided by the focal length
     return (project(x1) - project(target)).abs().sum(1)[ok].mean()
 
 
@@ -149,7 +160,7 @@ def evaluate(model, net, cams, bg, sh_degree, args, save_path=None, n_show=4):
 
 @torch.no_grad()
 def time_sweep(model, net, ref_cam, radius, bg, sh_degree, args, path, n=40):
-    """視点を少しずつ回しながら時刻を 0 -> 1 に動かした GIF"""
+    """GIF that moves time 0 -> 1 while rotating the viewpoint little by little"""
     frames = []
     for k in range(n):
         c2w = look_at_origin(30.0 + 90.0 * k / (n - 1), 30.0, radius)
@@ -168,32 +179,32 @@ def main():
     ap.add_argument("--black-bkgd", action="store_true")
     ap.add_argument("--sh-degree", type=int, default=3)
     ap.add_argument("--init-points", type=int, default=20000)
-    ap.add_argument("--init-extent", type=float, default=1.5, help="初期点を置く立方体の半辺長")
-    # 変形場
-    ap.add_argument("--static", action="store_true", help="変形なし（ふつうの 3DGS）で学習する")
-    ap.add_argument("--spacetime", action="store_true", help="時刻を持つガウシアン（gs/spacetime.py）で学習する")
-    ap.add_argument("--init-t-scale", type=float, default=0.2, help="--spacetime: 時間幅 σ_t の初期値")
-    ap.add_argument("--t-split-thresh", type=float, default=0.05, help="--spacetime: σ_t がこれより長いものは時間方向に分割する")
-    ap.add_argument("--lr-velocity", type=float, default=1.6e-3, help="--spacetime: 速度の学習率（シーンの大きさを掛ける）")
-    ap.add_argument("--trajectory", action="store_true", help="時刻ごとの位置を持つガウシアン（gs/trajectory.py）で学習する")
-    ap.add_argument("--knots", type=int, default=21, help="--trajectory: 時刻の節点の数")
+    ap.add_argument("--init-extent", type=float, default=1.5, help="half side length of the cube in which the initial points are placed")
+    # Deformation field
+    ap.add_argument("--static", action="store_true", help="train without deformation (ordinary 3DGS)")
+    ap.add_argument("--spacetime", action="store_true", help="train with spacetime Gaussians (gs/spacetime.py)")
+    ap.add_argument("--init-t-scale", type=float, default=0.2, help="--spacetime: initial value of the temporal width σ_t")
+    ap.add_argument("--t-split-thresh", type=float, default=0.05, help="--spacetime: those with σ_t longer than this are split along time")
+    ap.add_argument("--lr-velocity", type=float, default=1.6e-3, help="--spacetime: learning rate of the velocity (multiplied by the scene size)")
+    ap.add_argument("--trajectory", action="store_true", help="train with trajectory Gaussians, which hold per-time-knot positions (gs/trajectory.py)")
+    ap.add_argument("--knots", type=int, default=21, help="--trajectory: number of time knots")
     ap.add_argument("--knots-init", type=int, default=None,
-                    help="--trajectory: はじめから使う節点の数（既定は全部。3 などにすると時間の順に節点を増やしながら学習する）")
-    ap.add_argument("--grow-from", type=int, default=1000, help="--trajectory: この回数から節点を増やし始める")
-    ap.add_argument("--grow-every", type=int, default=150, help="--trajectory: 何回ごとに次の節点を使い始めるか")
-    ap.add_argument("--lr-offsets", type=float, default=3.2e-4, help="--trajectory: 節点のずれの学習率（シーンの大きさを掛ける）")
-    ap.add_argument("--min-t-scale", type=float, default=0.0, help="--spacetime: σ_t の下限（これより短くならない）")
+                    help="--trajectory: number of knots used from the start (default: all. With e.g. 3, it trains while adding knots in time order)")
+    ap.add_argument("--grow-from", type=int, default=1000, help="--trajectory: start adding knots from this iteration")
+    ap.add_argument("--grow-every", type=int, default=150, help="--trajectory: start using the next knot every this many iterations")
+    ap.add_argument("--lr-offsets", type=float, default=3.2e-4, help="--trajectory: learning rate of the knot offsets (multiplied by the scene size)")
+    ap.add_argument("--min-t-scale", type=float, default=0.0, help="--spacetime: lower bound of σ_t (it does not get shorter than this)")
     ap.add_argument("--lambda-smooth", type=float, default=0.0,
-                    help="近くのガウシアンの速度をそろえる損失の重み（0 で使わない。変形場でも --spacetime でも使える）")
+                    help="weight of the loss that aligns the velocities of nearby Gaussians (0 disables. Works with the deformation field and with --spacetime)")
     ap.add_argument("--lambda-track", type=float, default=0.0,
-                    help="正解の動きから作った 2D 追跡に合わせる損失の重み（0 で使わない。make_toy_dynamic.py のデータ専用）")
-    ap.add_argument("--track-window", type=float, default=0.1, help="--lambda-track: 追跡で結ぶ 2 フレームの時刻の差の上限")
-    ap.add_argument("--orbit", action="store_true", help="--lambda-track: データが make_toy_dynamic.py --orbit のもの")
-    ap.add_argument("--warm-up", type=int, default=3000, help="この回数までは変形なしで学習する")
+                    help="weight of the loss that fits the 2D track built from the ground-truth motion (0 disables. Only for make_toy_dynamic.py data)")
+    ap.add_argument("--track-window", type=float, default=0.1, help="--lambda-track: upper limit of the time difference between the 2 frames linked by a track")
+    ap.add_argument("--orbit", action="store_true", help="--lambda-track: the data is from make_toy_dynamic.py --orbit")
+    ap.add_argument("--warm-up", type=int, default=3000, help="train without deformation up to this iteration")
     ap.add_argument("--deform-depth", type=int, default=8)
     ap.add_argument("--deform-width", type=int, default=256)
-    ap.add_argument("--lr-deform", type=float, default=8e-4, help="MLP の学習率（指数減衰で 1/500 まで下げる）")
-    # densification（train.py と同じ。--max-gauss で数の上限を決められる）
+    ap.add_argument("--lr-deform", type=float, default=8e-4, help="learning rate of the MLP (lowered to 1/500 by exponential decay)")
+    # densification (same as train.py. --max-gauss sets an upper limit on the count)
     ap.add_argument("--densify-from", type=int, default=500)
     ap.add_argument("--densify-until", type=int, default=None)
     ap.add_argument("--densify-interval", type=int, default=100)
@@ -201,7 +212,7 @@ def main():
     ap.add_argument("--grad-thresh", type=float, default=0.0002)
     ap.add_argument("--min-opacity", type=float, default=0.005)
     ap.add_argument("--max-screen-size", type=float, default=20)
-    ap.add_argument("--max-gauss", type=int, default=0, help="この数を超えたら増やさない（削除だけ続ける）。0 で無制限")
+    ap.add_argument("--max-gauss", type=int, default=0, help="do not add any more once this count is exceeded (only removal continues). 0 means unlimited")
     ap.add_argument("--lambda-ssim", type=float, default=0.2)
     ap.add_argument("--tile", type=int, default=8)
     ap.add_argument("--max-entries", type=int, default=2 ** 25)
@@ -216,12 +227,12 @@ def main():
     train_cams = load_cameras(args.datadir, "train", args.half_res, bg_rgb, dev)
     test_cams = load_cameras(args.datadir, "test", args.half_res, bg_rgb, dev)
     val_cams = load_cameras(args.datadir, "val", args.half_res, bg_rgb, dev) or test_cams
-    assert all(c.time is not None for c in train_cams + test_cams), "各フレームに time が必要（D-NeRF 形式）"
+    assert all(c.time is not None for c in train_cams + test_cams), "each frame needs time (D-NeRF format)"
     bg = torch.tensor(bg_rgb, device=dev)
     extent = scene_extent(train_cams)
     densify_until = args.iters // 2 if args.densify_until is None else args.densify_until
     H, W = train_cams[0].H, train_cams[0].W
-    print(f"train {len(train_cams)} 枚 ({W}x{H}), test {len(test_cams)} 枚, extent={extent:.2f}")
+    print(f"train {len(train_cams)} images ({W}x{H}), test {len(test_cams)} images, extent={extent:.2f}")
 
     assert args.static + args.spacetime + args.trajectory <= 1
     if args.trajectory:
@@ -252,14 +263,15 @@ def main():
     for it in range(1, args.iters + 1):
         model.update_lr(it, args.iters)
         deforming = net is not None and it > args.warm_up
-        if deforming:   # MLP の学習率も位置と同じく指数減衰（変形を始めてから終わりまでで 1/500 に）
+        if deforming:   # the MLP learning rate also decays exponentially, like the position one (to 1/500 from the start of deformation to the end)
             s = (it - args.warm_up) / max(args.iters - args.warm_up, 1)
             for g in opt_net.param_groups:
                 g["lr"] = args.lr_deform * math.exp(s * math.log(1 / 500))
         if it % 1000 == 0:
             sh_degree = min(sh_degree + 1, args.sh_degree)
         if args.trajectory and model.n_active < args.knots:
-            # 時間の順に学習する: 使い始めた節点までのフレームだけを使い、半分はいちばん新しい 2 区間から選ぶ
+            # Train in time order: use only the frames up to the knots in use,
+            # and pick half of them from the newest 2 intervals
             if it >= args.grow_from and (it - args.grow_from) % args.grow_every == 0:
                 model.activate_next()
             t_max = model.t_active + 1e-6
@@ -330,8 +342,8 @@ def main():
     res = {"test_psnr": p, "test_ssim": s, "render_ms": sec * 1000, "n_gauss": len(model),
            "train_min": train_min, "ms_per_iter": train_min * 60000 / args.iters}
     (logdir / "eval.json").write_text(json.dumps(res, indent=1), encoding="utf-8")
-    print(f"学習 {train_min:.1f} 分, ガウシアン {len(model)}, test PSNR {p:.2f} dB, SSIM {s:.3f}, "
-          f"描画 {sec * 1000:.0f} ms/枚")
+    print(f"training {train_min:.1f} min, Gaussians {len(model)}, test PSNR {p:.2f} dB, SSIM {s:.3f}, "
+          f"render {sec * 1000:.0f} ms/image")
 
 
 if __name__ == "__main__":

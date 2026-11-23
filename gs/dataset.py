@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-Blender 合成データセット形式（nerf_synthetic・nerf-toy と同じ）の読み込み。
+Loader for the Blender synthetic dataset format (same as nerf_synthetic and nerf-toy).
 
-    <datadir>/transforms_{train,val,test}.json  +  画像
-    {"camera_angle_x": 水平画角[rad],
+    <datadir>/transforms_{train,val,test}.json  +  images
+    {"camera_angle_x": horizontal field of view [rad],
      "frames": [{"file_path": "./train/r_0", "transform_matrix": 4x4 camera-to-world}, ...]}
 
-file_path に拡張子が無ければ .png を補う。RGBA 画像はアルファで背景色と合成する。
-動くシーン（D-NeRF 形式）は各フレームに "time": 時刻 [0,1] を持ち、Camera.time に入る。
+If file_path has no extension, .png is appended. RGBA images are composited onto the background color with alpha.
+Dynamic scenes (D-NeRF format) have "time": time [0,1] in each frame, which goes into Camera.time.
 """
 
 import json
@@ -36,7 +36,8 @@ def _load_image(path, half_res, bg):
 
 
 def load_cameras(datadir, split, half_res=False, bg=(1.0, 1.0, 1.0), device="cuda"):
-    """1 スプリット分を Camera のリストとして読み込む（無ければ None）。bg は RGBA 画像を合成する背景色。"""
+    """Load one split as a list of Camera (None if it does not exist).
+    bg is the background color that RGBA images are composited onto."""
     datadir = Path(datadir)
     meta_path = datadir / f"transforms_{split}.json"
     if not meta_path.exists():

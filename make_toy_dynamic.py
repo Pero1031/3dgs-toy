@@ -1,16 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-動くシーンの動作確認用データセットを生成する（外部データのダウンロード不要）。
+Generate a dataset for checking that dynamic scenes work (no external data download needed).
 
-make_toy_dataset.py の縞模様の球と立方体を、時刻 t ∈ [0,1] で動かす:
-    球     上下に弾み（中心の高さ 0.35 sin 2πt）、半径が脈打つ（1 + 0.15 sin 4πt）。模様は面に付いて動く
-    立方体 球のまわりの円周上で、±15° 往復する（軸に平行な向きのまま）。--orbit なら半周する
---orbit では立方体が大きく動く（約 5 単位）。基準の形を 1 つ持つ変形モデルの苦手な例として残している。
-照明は固定した平行光で、拡散反射だけ。球は回転しないので、面の各点の明るさは時刻によらない
-（＝色を各ガウシアンに持たせる変形モデルで、誤差なく表せるシーン）。
+Moves the striped-pattern sphere and the cube of make_toy_dataset.py with time t ∈ [0,1]:
+    sphere  bounces up and down (center height 0.35 sin 2πt) and its radius pulsates (1 + 0.15 sin 4πt).
+            The pattern moves attached to the surface
+    cube    swings back and forth by ±15° on a circle around the sphere (staying axis-aligned).
+            With --orbit it goes half way around
+With --orbit the cube moves a long way (about 5 units). It is kept as an example that a deformation model
+with one canonical shape is bad at.
+Lighting is a fixed directional light, with diffuse reflection only. The sphere does not rotate, so the brightness
+of each surface point does not depend on time
+(= a scene that a deformation model storing color on each Gaussian can represent without error).
 
-D-NeRF と同じ形式（transforms_*.json の各フレームに "time"）で保存する。学習用は 1 時刻に 1 視点
-（カメラは毎回ランダムな位置に飛ぶ）、テスト用は学習に無い中間の時刻を、赤道より少し上の一周から見る。
+Saved in the same format as D-NeRF ("time" in each frame of transforms_*.json). The training set has
+1 view per time (the camera jumps to a random position every time). The test set views intermediate times that are not in the
+training set, from one loop slightly above the equator.
 
     python make_toy_dynamic.py --out data/toy_dynamic
     python make_toy_dynamic.py --out data/toy_dynamic_orbit --orbit
@@ -27,11 +32,11 @@ from gs.poses import look_at_origin
 
 LIGHT = np.array([0.4, -0.5, 0.75])
 LIGHT = LIGHT / np.linalg.norm(LIGHT)
-BOX_H, ORBIT_R, BOX_Z = 0.3, 1.7, -0.4   # 立方体の半辺長、周回の半径、高さ
+BOX_H, ORBIT_R, BOX_Z = 0.3, 1.7, -0.4   # half side length of the cube, orbit radius, height
 
 
 def scene(t, orbit=False):
-    """時刻 t の球の中心・半径と、立方体の中心"""
+    """Center and radius of the sphere and center of the cube at time t"""
     c = np.array([0.0, 0.0, 0.35 * np.sin(2 * np.pi * t)])
     r = 1.0 + 0.15 * np.sin(4 * np.pi * t)
     phi = np.pi / 2 + (np.pi * t if orbit else np.radians(15) * np.sin(2 * np.pi * t))
@@ -47,7 +52,7 @@ def render(c2w, H, W, focal, t, orbit=False):
     o = np.broadcast_to(c2w[:3, 3], d.shape)
     c, r, box_c = scene(t, orbit)
 
-    # 球との交差
+    # Intersection with the sphere
     oc = o - c
     b = (oc * d).sum(-1)
     cc = (oc * oc).sum(-1) - r * r
@@ -55,7 +60,7 @@ def render(c2w, H, W, focal, t, orbit=False):
     t_s = np.where(disc > 0, -b - np.sqrt(np.maximum(disc, 0)), np.inf)
     t_s = np.where(t_s > 0, t_s, np.inf)
 
-    # 軸平行な立方体との交差（slab 法）
+    # Intersection with the axis-aligned cube (slab method)
     with np.errstate(divide="ignore", invalid="ignore"):
         t1 = (box_c - BOX_H - o) / d
         t2 = (box_c + BOX_H - o) / d
@@ -67,7 +72,7 @@ def render(c2w, H, W, focal, t, orbit=False):
     alpha = np.zeros((H, W))
 
     hit_s = (t_s < t_b) & np.isfinite(t_s)
-    n = (o + d * np.where(hit_s, t_s, 0.0)[..., None] - c) / r      # 単位法線 = 球の中心から見た向き
+    n = (o + d * np.where(hit_s, t_s, 0.0)[..., None] - c) / r      # unit normal = direction seen from the sphere center
     lon = np.arctan2(n[..., 1], n[..., 0])
     lat = np.arcsin(np.clip(n[..., 2], -1, 1))
     stripe = ((np.floor(lon / (np.pi / 6)) + np.floor(lat / (np.pi / 8))) % 2)[..., None]
@@ -90,9 +95,11 @@ def render(c2w, H, W, focal, t, orbit=False):
 
 
 def render_aa(c2w, H, W, focal, s, *args):
-    """1 画素を s×s 本のレイで描いて平均する（輪郭と模様の境目のギザギザを消す）。s=1 なら render と同じ。
+    """Render one pixel with s×s rays and average them (removes the aliased (staircase) edges at silhouettes and
+    pattern boundaries). Same as render when s=1.
 
-    色は不透明度を掛けてから平均し、平均した不透明度で割り戻す（PNG の RGBA は掛けていない色を持つので）。
+    Colors are multiplied by opacity before averaging, then divided back by the averaged opacity
+    (because PNG RGBA holds non-premultiplied color).
     """
     if s == 1:
         return render(c2w, H, W, focal, *args)
@@ -110,9 +117,9 @@ def main():
     ap.add_argument("--n-train", type=int, default=100)
     ap.add_argument("--n-test", type=int, default=20)
     ap.add_argument("--supersample", type=int, default=4,
-                    help="1 画素を何×何本のレイで描いて平均するか（1 だと輪郭がギザギザになり、ガウシアンでは再現できない）")
+                    help="render each pixel with N×N rays and average them (with 1, silhouettes get aliased (staircase) edges that Gaussians cannot reproduce)")
     ap.add_argument("--radius", type=float, default=5.5)
-    ap.add_argument("--orbit", action="store_true", help="立方体を半周させる（大きく動く例）")
+    ap.add_argument("--orbit", action="store_true", help="make the cube go half way around (an example of large motion)")
     args = ap.parse_args()
 
     fov = np.deg2rad(40.0)
@@ -125,9 +132,9 @@ def main():
         for k in range(n):
             if split == "train":
                 t = k / (n - 1)
-                az, el = rng.uniform(0, 360), rng.uniform(5, 80)   # 上半球からランダム
+                az, el = rng.uniform(0, 360), rng.uniform(5, 80)   # random over the upper hemisphere
             else:
-                t = (k + 0.5) / n                                  # 学習に無い中間の時刻
+                t = (k + 0.5) / n                                  # intermediate times that are not in the training set
                 az, el = 360.0 * k / n + (15.0 if split == "test" else 40.0), 30.0
             c2w = look_at_origin(az, el, args.radius)
             img = render_aa(c2w, args.size, args.size, focal, args.supersample, t, args.orbit)
@@ -136,7 +143,7 @@ def main():
                            "transform_matrix": c2w.tolist()})
         with open(args.out / f"transforms_{split}.json", "w", encoding="utf-8") as f:
             json.dump({"camera_angle_x": float(fov), "frames": frames}, f, indent=2)
-        print(f"{split}: {n} 枚 -> {args.out / split}")
+        print(f"{split}: {n} images -> {args.out / split}")
 
 
 if __name__ == "__main__":

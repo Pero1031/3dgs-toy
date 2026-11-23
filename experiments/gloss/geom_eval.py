@@ -1,16 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-ガウシアンの位置の誤差を、真のメッシュ（Erato）と比べる。ガウシアンの中心だけを使う簡易な指標。
-D:/GoLD_rayt/out/studies/gs_gloss/geom_eval.py と同じ計算で、結果を JSON にも書く。
+Compare the position error of the Gaussians against the true mesh (Erato). A simple metric that uses only the
+Gaussian centres.
+Same computation as D:/GoLD_rayt/out/studies/gs_gloss/geom_eval.py, and the results are also written to JSON.
 
     python experiments/gloss/geom_eval.py logs/gloss_gold/point_cloud.ply logs/gloss_matte/point_cloud.ply
 
-不透明度が閾値を超えるガウシアンについて:
-    accuracy  中心 -> 真の表面上の最も近い点までの距離
-    signed    同じ距離に符号を付けたもの（正 = 表面の外側、負 = 内側。最も近い三角形の法線で判定）
-    floaters  表面から 2 cm 以上離れたものの割合
-    coverage  真の表面上の点 -> 最も近いガウシアン中心までの距離（表面を覆えているか）
-単位は mm（シーンは m 単位で、像の高さは 500 mm）。
+For Gaussians whose opacity exceeds the threshold:
+    accuracy  distance from the centre -> the nearest point on the true surface
+    signed    the same distance with a sign (positive = outside the surface, negative = inside. Decided by the normal
+              of the nearest triangle)
+    floaters  fraction that is 2 cm or more away from the surface
+    coverage  distance from a point on the true surface -> the nearest Gaussian centre (is the surface covered?)
+Units are mm (the scene is in m, and the statue is 500 mm tall).
 """
 
 import json
@@ -22,7 +24,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 OBJ = r"D:\GoLD_rayt\GoLD_rayt\assets\Meshes\erato\erato_closed.obj"
-SCALE, ROT_DEG, TRANS = 0.0133, 90.0, np.array([0.0011, 0.0169, 0.0314])  # make_views.py のシーンと同じ配置
+SCALE, ROT_DEG, TRANS = 0.0133, 90.0, np.array([0.0011, 0.0169, 0.0314])  # same placement as the scene in make_views.py
 N_SAMPLES = 400000
 THRESHOLDS = (0.3, 0.5, 0.7)
 
@@ -37,7 +39,7 @@ def load_mesh():
                 f.append([int(p.split("/")[0]) - 1 for p in line.split()[1:4]])
     v = np.array(v) * SCALE
     c, s = math.cos(math.radians(ROT_DEG)), math.sin(math.radians(ROT_DEG))
-    R = np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])  # +y 軸まわりの回転
+    R = np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])  # rotation about the +y axis
     return v @ R.T + TRANS, np.array(f)
 
 

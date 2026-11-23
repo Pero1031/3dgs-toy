@@ -1,18 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-追加の検証 5（段階 3）の集計と図: train_deferred.py の 3 方式と、通常の 3DGS（eval_sphere_vanilla.py）を比べる。
+Summary and figures for Follow-up 5 (stage 3): compare the 3 modes of train_deferred.py with vanilla 3DGS
+(eval_sphere_vanilla.py).
 
-1. logs/dr_*/eval.json と logs/sphere_vanilla/eval.json から、再現度と区画ごとのぼけを集める。
-2. 画素の大きさを変えたときの法線のばらつき: テスト 12 視点を 512・256・128 px で描き、なめらかと凹凸の区画の
-   画素で σ = 2√(1 − |n̄|)（異方性の補正なし）を次の 3 つで比べる（同じ画素で）。
-       正解         画素の箱型の足跡の中で解析的な法線を平均（splat_normals.truth_and_select）
-       置いた円盤   正解のメッシュの頂点に置いた小さな円盤を合成（splat_normals.py、不透明度 0.99。学習なし）
-       学習した     train_deferred.py の 3 方式のガウシアンを合成
-3. 学習したガウシアンの大きさ・不透明度・基準の球面からのずれ。
+1. Collect the reconstruction quality and the blur per sector from logs/dr_*/eval.json and
+   logs/sphere_vanilla/eval.json.
+2. Normal variation when the pixel size is changed: render the 12 test views at 512, 256, 128 px, and on the pixels
+   of the smooth and bump sectors compare σ = 2√(1 − |n̄|) (no anisotropy correction) among the following 3
+   (on the same pixels).
+       Ground truth   average the analytic normals within the box footprint of the pixel
+                      (splat_normals.truth_and_select)
+       Placed discs   composite small discs placed at the vertices of the true mesh (splat_normals.py,
+                      opacity 0.99. No training)
+       Trained        composite the Gaussians of the 3 modes of train_deferred.py
+3. Size, opacity, and offset from the reference sphere of the trained Gaussians.
 
     python experiments/gloss/plot_deferred.py
 
-出力: experiments/gloss/deferred_sphere.json、figures/deferred_sphere.png、figures/deferred_maps.png
+Output: experiments/gloss/deferred_sphere.json, figures/deferred_sphere.png, figures/deferred_maps.png
 """
 
 import json
@@ -41,17 +46,17 @@ from gs.render import render  # noqa: E402
 
 DEV = "cuda"
 MODES = ["learned", "toksvig", "both"]
-NBAR = r"$|\bar{n}|$"   # 図の中の |n̄|（結合文字の上線は日本語の字体で崩れるので数式で書く）
-MODE_LABEL = {"learned": "遅延: 粗さを学習", "toksvig": f"遅延: {NBAR} から換算", "both": "遅延: 両方",
-              "vanilla": "通常の 3DGS（SH 3 次の色）"}
+NBAR = r"$|\bar{n}|$"   # |n̄| in the figures (the combining overline breaks in the Japanese font, so it is written as math)
+MODE_LABEL = {"learned": "Deferred: roughness learned", "toksvig": f"Deferred: converted (from {NBAR})", "both": "Deferred: both",
+              "vanilla": "Vanilla 3DGS (colour of SH degree 3)"}
 C_MODE = {"learned": sr.C_CAT[0], "toksvig": sr.C_CAT[1], "both": sr.C_CAT[2], "vanilla": sr.C_CAT[3],
           "splat": sr.C_CAT[4]}
 M_MODE = {"learned": "o", "toksvig": "s", "both": "^", "vanilla": "D", "splat": "v"}
 SCALES = ["512", "256", "128"]
-SECTOR_GROUPS = [("smooth", ["smooth_a", "smooth_b"], "なめらか"), ("bump3", ["bump3"], "凹凸 3°"),
-                 ("bump6", ["bump6"], "凹凸 6°"), ("bump12", ["bump12"], "凹凸 12°"),
+SECTOR_GROUPS = [("smooth", ["smooth_a", "smooth_b"], "Smooth"), ("bump3", ["bump3"], "Bumps 3°"),
+                 ("bump6", ["bump6"], "Bumps 6°"), ("bump12", ["bump12"], "Bumps 12°"),
                  ("brdf3", ["brdf3"], "GGX 3°"), ("brdf6", ["brdf6"], "GGX 6°"), ("brdf12", ["brdf12"], "GGX 12°")]
-MAP_VIEWS = [(2, "凹凸の区画が正面"), (8, "GGX の区画が正面")]   # テスト視点の番号（経度 162° と 340°）
+MAP_VIEWS = [(2, "bump sectors in front"), (8, "GGX sectors in front")]   # indices of the test views (longitude 162° and 340°)
 OUT_JSON = HERE / "deferred_sphere.json"
 
 
@@ -69,7 +74,7 @@ def load_deferred(mode):
 
 
 def group_mean(sectors, key, names):
-    """区画をまとめる（なめらか A・B は画素数で重みをつけた平均）"""
+    """Merge sectors (smooth A and B are averaged with weights by pixel count)"""
     w = np.array([sectors[n]["n_pixels"] for n in names], dtype=float)
     return float(np.sum([sectors[n][key] * wi for n, wi in zip(names, w)]) / w.sum())
 
@@ -114,7 +119,8 @@ def gaussian_stats():
 
 @torch.no_grad()
 def resolution_study():
-    """テスト 12 視点で、画素の大きさごとの σ = 2√(1 − |n̄|)（異方性の補正なし）を、正解・置いた円盤・学習した 3 方式で"""
+    """On the 12 test views, σ = 2√(1 − |n̄|) (no anisotropy correction) for each pixel size, for the ground truth,
+    the placed discs, and the 3 trained modes"""
     t0 = time.time()
     P_np, N_np = sn.read_ply(ms.DATA / "mesh" / "au.ply")
     P = torch.tensor(P_np, device=DEV)
@@ -140,7 +146,7 @@ def resolution_study():
                 v = np.degrees(v.cpu().numpy())
                 for kk in sr.GEOM:
                     acc.setdefault(s, {}).setdefault(key, {}).setdefault(ms.SECTORS[kk][0], []).append(v[sec == kk])
-        print(f"  {s} px 完了（{time.time() - t0:.0f} 秒）", flush=True)
+        print(f"  {s} px done ({time.time() - t0:.0f} s)", flush=True)
     out = {}
     for s, d in acc.items():
         out[s] = {}
@@ -152,7 +158,7 @@ def resolution_study():
     return out
 
 
-# ---- 図 ----
+# ---- Figures ----
 
 def _dodge(i, n, w=0.16):
     return (i - (n - 1) / 2) * w
@@ -165,11 +171,11 @@ def plot_summary(R, path):
     xg = np.arange(len(SECTOR_GROUPS))
     glab = [g[2] for g in SECTOR_GROUPS]
 
-    # (a) 区画ごとのぼけ（256 px、実際に使ったぼけ）
+    # (a) blur per sector (256 px, the blur actually used)
     ax = fig.add_subplot(gs_[0, :4])
     sr._axes_style(ax)
     ref = [R["stage2_fitted_all"]["256"][g] for g, _, _ in SECTOR_GROUPS]
-    series = [("ref", "段階 2: 正解の形で、点ごとに最適化したぼけ", so.C_TEXT, "_", ref)] + [
+    series = [("ref", "Stage 2: blur optimized per point with the true shape", so.C_TEXT, "_", ref)] + [
         (m, MODE_LABEL[m], C_MODE[m], M_MODE[m], [R["modes"][m]["eval"]["256"]["sectors"][g]["sigma"] for g, _, _ in SECTOR_GROUPS])
         for m in MODES]
     for i, (key, lab, col, mk, y) in enumerate(series):
@@ -181,11 +187,11 @@ def plot_summary(R, path):
     ax.set_xticks(xg)
     ax.set_xticklabels(glab, fontsize=8)
     ax.set_ylim(0, 32)
-    ax.set_ylabel("反射方向でのぼけ σ [度]", fontsize=8)
+    ax.set_ylabel("Blur σ in the reflection direction [degrees]", fontsize=8)
     ax.legend(loc="upper left", fontsize=7.2, frameon=False, ncol=2)
-    ax.set_title("(a) 区画ごとのぼけ（学習した 256 px、テスト視点の画素の平均）", fontsize=9, loc="left")
+    ax.set_title("(a) Blur per sector (at the trained 256 px, mean over the test-view pixels)", fontsize=9, loc="left")
 
-    # (b) 再現度と画素の大きさ
+    # (b) reconstruction quality and pixel size
     ax = fig.add_subplot(gs_[0, 4:])
     sr._axes_style(ax)
     xs = np.arange(len(SCALES))
@@ -195,32 +201,32 @@ def plot_summary(R, path):
         ax.plot(xs, y, color=C_MODE[key], marker=M_MODE[key], ms=5, lw=1.4, mec=so.C_SURF, mew=0.8,
                 label=MODE_LABEL[key])
     ax.set_xticks(xs)
-    ax.set_xticklabels([f"{s} px" + ("\n（学習）" if s == "256" else "") for s in SCALES], fontsize=7.5)
+    ax.set_xticklabels([f"{s} px" + ("\n(trained)" if s == "256" else "") for s in SCALES], fontsize=7.5)
     ax.set_xlim(-0.3, len(SCALES) - 0.7)
     ax.set_ylim(21.0, 24.0)
-    ax.set_ylabel("球の領域の PSNR [dB]（テスト 12 視点）", fontsize=8)
+    ax.set_ylabel("PSNR over the sphere region [dB] (12 test views)", fontsize=8)
     ax.legend(loc="lower right", fontsize=6.8, frameon=False)
-    ax.set_title("(b) 再現度", fontsize=9, loc="left")
+    ax.set_title("(b) Reconstruction quality", fontsize=9, loc="left")
 
-    # (c) 両方の方式の内訳
+    # (c) breakdown of the both mode
     ax = fig.add_subplot(gs_[1, :4])
     sr._axes_style(ax)
     sec = R["modes"]["both"]["eval"]["256"]["sectors"]
-    parts = [("sig_geo", f"形のぼけ（{NBAR} から換算）", C_MODE["toksvig"], M_MODE["toksvig"]),
-             ("sig_mat", "材質のぼけ（学習した粗さ）", C_MODE["learned"], M_MODE["learned"])]
+    parts = [("sig_geo", f"Geometric blur (converted from {NBAR})", C_MODE["toksvig"], M_MODE["toksvig"]),
+             ("sig_mat", "Material blur (learned roughness)", C_MODE["learned"], M_MODE["learned"])]
     for i, (key, lab, col, mk) in enumerate(parts):
         ax.scatter(xg + _dodge(i, 2, 0.2), [sec[g][key] for g, _, _ in SECTOR_GROUPS], marker=mk, s=34, color=col,
                    edgecolor=so.C_SURF, lw=0.8, label=lab, zorder=3)
-    ax.scatter(xg + 0.3, ref, marker="_", s=110, color=so.C_TEXT, lw=2.0, label="段階 2（(a) と同じ）", zorder=3)
+    ax.scatter(xg + 0.3, ref, marker="_", s=110, color=so.C_TEXT, lw=2.0, label="Stage 2 (same as (a))", zorder=3)
     ax.set_xticks(xg)
     ax.set_xticklabels(glab, fontsize=8)
     ax.set_ylim(0, 32)
-    ax.set_ylabel("反射方向でのぼけ σ [度]", fontsize=8)
+    ax.set_ylabel("Blur σ in the reflection direction [degrees]", fontsize=8)
     ax.legend(loc="upper left", fontsize=7.2, frameon=False, ncol=3)
-    ax.set_title("(c) 両方の方式で、ぼけが形と材質のどちらに入ったか（実際に使ったぼけは 2 つの二乗和の平方根）",
+    ax.set_title("(c) Both mode: whether the blur went to geometry or to material (the blur actually used is the root sum of squares of the two)",
                  fontsize=9, loc="left")
 
-    # (d) ガウシアンの奥行き
+    # (d) depth of the Gaussians
     ax = fig.add_subplot(gs_[1, 4:])
     sr._axes_style(ax)
     for m in MODES:
@@ -231,18 +237,18 @@ def plot_summary(R, path):
                 label=MODE_LABEL[m])
     ax.axvspan(-1.3, 1.3, color=so.C_GRID, alpha=0.8, lw=0, zorder=0)
     ax.axvline(0, color=so.C_TEXT2, lw=1.0, ls=(0, (4, 3)))
-    ax.text(1.6, ax.get_ylim()[1] * 0.92, "凹凸の\n変位の範囲", fontsize=6.8, color=so.C_TEXT2, va="top")
-    ax.set_xlabel("基準の球面からのずれ [mm]（負は内側）", fontsize=8)
-    ax.set_ylabel("割合 [1/mm]（不透明度で重み）", fontsize=8)
+    ax.text(1.6, ax.get_ylim()[1] * 0.92, "range of the bump\ndisplacement", fontsize=6.8, color=so.C_TEXT2, va="top")
+    ax.set_xlabel("Offset from the reference sphere [mm] (negative is inside)", fontsize=8)
+    ax.set_ylabel("Fraction [1/mm] (weighted by opacity)", fontsize=8)
     ax.legend(loc="upper left", fontsize=6.8, frameon=False)
-    ax.set_title(f"(d) 学習したガウシアンの位置（1 画素 ≈ {R['pixel_width_mm']['256']:.1f} mm）", fontsize=9, loc="left")
+    ax.set_title(f"(d) Position of the trained Gaussians (1 pixel ≈ {R['pixel_width_mm']['256']:.1f} mm)", fontsize=9, loc="left")
 
-    # (e)〜(g) 画素の大きさを変えたときの法線のばらつき
+    # (e)–(g) normal variation when the pixel size is changed
     width = np.array([R["pixel_width_mm"][s] for s in SCALES])
     RS = R["resolution"]
-    lines = [("truth", "正解（足跡の中の法線の平均）", so.C_TEXT, "o", (0, (4, 3)), 1.2),
-             ("splat", "正解の面に置いた小さな円盤（学習なし）", C_MODE["splat"], M_MODE["splat"], "-", 1.4)] + [
-        (m, f"学習したガウシアン（{MODE_LABEL[m]}）", C_MODE[m], M_MODE[m], "-", 1.4) for m in MODES]
+    lines = [("truth", "Ground truth (mean of the normals within the footprint)", so.C_TEXT, "o", (0, (4, 3)), 1.2),
+             ("splat", "Small discs placed on the true surface (no training)", C_MODE["splat"], M_MODE["splat"], "-", 1.4)] + [
+        (m, f"Trained Gaussians ({MODE_LABEL[m]})", C_MODE[m], M_MODE[m], "-", 1.4) for m in MODES]
     first = None
     for j, name in enumerate(["bump3", "bump6", "bump12"]):
         ax = fig.add_subplot(gs_[2, 2 * j:2 * j + 2])
@@ -260,13 +266,13 @@ def plot_summary(R, path):
         ax.minorticks_off()
         ax.set_xlim(width.min() / 1.25, width.max() * 1.25)
         ax.set_ylim(0, top * 1.12)
-        ax.set_xlabel("1 画素の幅 [mm]（球の表面、中央値）", fontsize=8)
+        ax.set_xlabel("Width of one pixel [mm] (on the sphere surface, median)", fontsize=8)
         if j == 0:
-            ax.set_ylabel(f"σ = 2√(1 − {NBAR}) [度]（異方性の補正なし）", fontsize=8)
+            ax.set_ylabel(f"σ = 2√(1 − {NBAR}) [degrees] (no anisotropy correction)", fontsize=8)
         ax.set_title(f"({'efg'[j]}) {sr.SECTOR_LABEL[name]}", fontsize=9, loc="left")
     fig.legend(*first.get_legend_handles_labels(), loc="upper center", bbox_to_anchor=(0.5, 0.0), ncol=3,
                fontsize=7.2, frameon=False)
-    fig.suptitle("凹凸の球で、3dgs-toy に遅延シェーディングを入れた 3 方式と通常の 3DGS（学習は 256 px）",
+    fig.suptitle("Bumpy sphere: the 3 modes of deferred shading added to 3dgs-toy, and vanilla 3DGS (trained at 256 px)",
                  fontsize=10.5, x=0.01, y=0.995, ha="left")
     fig.savefig(path, facecolor=so.C_SURF, bbox_inches="tight", pad_inches=0.12)
     plt.close(fig)
@@ -274,7 +280,7 @@ def plot_summary(R, path):
 
 @torch.no_grad()
 def plot_maps(path):
-    """テスト 2 視点（256 px）: 正解 / 通常の 3DGS / 遅延・両方 / 形のぼけ / 材質のぼけ"""
+    """2 test views (256 px): ground truth / vanilla 3DGS / deferred: both / geometric blur / material blur"""
     plt = sr.er.setup_plt()
     import matplotlib.colors as mcolors
     d256 = ROOT / "data" / "gloss_sphere" / "s256"
@@ -288,7 +294,7 @@ def plot_maps(path):
     cmap = plt.get_cmap("Blues").copy()
     cmap.set_bad(so.C_SURF)
     norm = mcolors.Normalize(0, 30)
-    cols = ["正解", "通常の 3DGS", "遅延: 両方", f"形のぼけ（{NBAR} から換算）", "材質のぼけ（学習した粗さ）"]
+    cols = ["Ground truth", "Vanilla 3DGS", "Deferred: both", f"Geometric blur (converted from {NBAR})", "Material blur (learned roughness)"]
     fig = plt.figure(figsize=(11.6, 5.3), dpi=200, facecolor=so.C_SURF)
     gs_ = fig.add_gridspec(len(MAP_VIEWS), 6, width_ratios=[1, 1, 1, 1, 1, 0.06], hspace=0.16, wspace=0.05,
                            left=0.01, right=0.95, top=0.9, bottom=0.02)
@@ -323,35 +329,35 @@ def plot_maps(path):
             if r == 0:
                 ax.set_title(cols[j], fontsize=8.5, loc="left")
             if j == 0:
-                ax.text(-0.02, 0.5, f"テスト視点 {k}\n{note}", transform=ax.transAxes, rotation=90, ha="right",
+                ax.text(-0.02, 0.5, f"Test view {k}\n{note}", transform=ax.transAxes, rotation=90, ha="right",
                         va="center", fontsize=7.5, color=so.C_TEXT2)
     cax = fig.add_subplot(gs_[:, 5])
     cb = fig.colorbar(im, cax=cax)
-    cb.set_label("反射方向でのぼけ σ [度]", fontsize=8)
+    cb.set_label("Blur σ in the reflection direction [degrees]", fontsize=8)
     cb.outline.set_visible(False)
-    fig.suptitle("遅延シェーディング（両方の方式）のテスト視点（256 px、球の中央を切り出し。点線は区画の境目）",
+    fig.suptitle("Deferred shading (both mode) on test views (256 px, cropped to the centre of the sphere. Dotted lines are sector boundaries)",
                  fontsize=9.5, x=0.01, y=0.995, ha="left")
     fig.savefig(path, facecolor=so.C_SURF, bbox_inches="tight", pad_inches=0.1)
     plt.close(fig)
 
 
 def main():
-    if "--plot-only" in sys.argv:   # deferred_sphere.json から図だけ描き直す（maps は描き直す）
+    if "--plot-only" in sys.argv:   # redraw only the figures from deferred_sphere.json (the maps are rendered again)
         R = json.loads(OUT_JSON.read_text(encoding="utf-8"))
     else:
         R = collect()
         R["gaussians"] = gaussian_stats()
-        print("画素の大きさを変えたときのばらつき（テスト 12 視点）", flush=True)
+        print("Variation when the pixel size is changed (12 test views)", flush=True)
         R["resolution"] = resolution_study()
         OUT_JSON.write_text(json.dumps(R, indent=1, ensure_ascii=False), encoding="utf-8")
     for s in SCALES:
-        print(f"[{s} px] σ（異方性の補正なし）: " + "  ".join(
+        print(f"[{s} px] σ (no anisotropy correction): " + "  ".join(
             f"{k}: " + "/".join(f"{R['resolution'][s][k][n]:.1f}" for n in ("smooth", "bump3", "bump6", "bump12"))
             for k in ["truth", "splat"] + MODES))
     fig_dir = HERE / "figures"
     plot_summary(R, fig_dir / "deferred_sphere.png")
     plot_maps(fig_dir / "deferred_maps.png")
-    print(f"-> {OUT_JSON}、{fig_dir / 'deferred_sphere.png'}、{fig_dir / 'deferred_maps.png'}")
+    print(f"-> {OUT_JSON}, {fig_dir / 'deferred_sphere.png'}, {fig_dir / 'deferred_maps.png'}")
 
 
 if __name__ == "__main__":

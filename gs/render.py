@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""ガウシアン群をカメラから描画する（パラメータの活性化 → 投影 → SH で色 → ラスタライズ）。"""
+"""Render the set of Gaussians from a camera (activate parameters → project → color from SH → rasterize)."""
 
 import torch
 import torch.nn.functional as F
@@ -10,17 +10,19 @@ from .sh import eval_sh
 
 def render(model, cam, bg, sh_degree, tile=8, max_entries=2 ** 25, near=0.2, delta=None):
     """
-    delta: 動くシーン用。時刻に応じたずれ（gs/deform.py や gs/spacetime.py が出す）。どのキーも省ける。
-           "means" / "log_scales" (N,3)  位置と log スケールに足す
-           "quats" (N,4)                 正規化した四元数に足してから正規化し直す
-           "opacity" (N,)                不透明度に掛ける（その時刻にどれだけ存在するか）
+    delta: for dynamic scenes. Time-dependent offsets (produced by gs/deform.py or gs/spacetime.py).
+           Any key may be omitted.
+           "means" / "log_scales" (N,3)  added to the position and the log scale
+           "quats" (N,4)                 added to the normalized quaternion, which is then normalized again
+           "opacity" (N,)                multiplied into the opacity (how much it exists at that time)
 
     Returns dict:
         image (H,W,3), alpha (H,W)
-        means2d (Nv,2)  画面上の中心。学習時は .grad に ∂L/∂μ' が入る（densification の判定に使う）
-        ids (Nv,)       means2d などが元の何番目のガウシアンか
-        on_screen (Nv,) 画面内に映ったか
-        radius (Nv,)    画面上の半径 3σ [px]（大きすぎるものの prune 判定に使う）
+        means2d (Nv,2)  screen-space centers. During training .grad holds ∂L/∂μ'
+                        (used for the densification decision)
+        ids (Nv,)       which original Gaussian each entry of means2d etc. belongs to
+        on_screen (Nv,) whether it appeared on screen
+        radius (Nv,)    screen-space radius 3σ [px] (used for the prune decision on ones that are too large)
     """
     p = model.params
     means_all, log_scales, quats = p["means"], p["log_scales"], p["quats"]
@@ -35,11 +37,12 @@ def render(model, cam, bg, sh_degree, tile=8, max_entries=2 ** 25, near=0.2, del
     if "opacity" in delta:
         opacity_all = opacity_all * delta["opacity"]
 
-    # カメラの後ろ・近すぎるものを先に取り除く（z<=0 で割ると NaN の勾配が混ざるため、計算前に抜く）
+    # First remove those behind or too close to the camera
+    # (dividing by z<=0 mixes NaN gradients in, so they are dropped before the computation)
     with torch.no_grad():
         z = means_all @ cam.R[2] + cam.t[2]
         keep = z > near
-        if "opacity" in delta:   # この時刻にほぼ存在しないもの。どの画素でも α < 1/255 で捨てられるので結果は同じ
+        if "opacity" in delta:   # nearly absent at this time. Discarded with α < 1/255 at every pixel, so the result is the same
             keep &= opacity_all > 1.0 / 255.0
         ids = torch.nonzero(keep).squeeze(1)
 
@@ -53,7 +56,7 @@ def render(model, cam, bg, sh_degree, tile=8, max_entries=2 ** 25, near=0.2, del
     if means2d.requires_grad:
         means2d.retain_grad()
 
-    # 視線方向に応じた色（現在の次数までの SH だけ使う）
+    # Color depending on the view direction (only SH up to the current degree is used)
     n_coef = (sh_degree + 1) ** 2
     sh = torch.cat([p["sh0"][ids], p["shN"][ids, : n_coef - 1]], 1)
     dirs = F.normalize(means - cam.center, dim=-1)

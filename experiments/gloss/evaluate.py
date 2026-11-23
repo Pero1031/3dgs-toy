@@ -1,16 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-光沢の検証: 学習済みモデルを学習視点とテスト視点で描画し、PSNR / SSIM / LPIPS と比較画像を出す。
+Gloss test: render trained models on the training views and the test views, and output PSNR / SSIM / LPIPS and
+comparison images.
 
-光沢面で 3DGS が崩れるのが「学習した視点は覚えたが新しい視点に汎化しない」のか「そもそも表せない」のかを
-区別するため、学習視点とテスト視点の両方で測る。指標は像の領域（マスク）だけで平均した値と、
-全画面の値の両方を出す（背景は一様な灰色で再現が容易なので、全画面の値は甘く出る）。
+To tell apart whether 3DGS breaks down on glossy surfaces because "the trained views were memorized but it does not
+generalize to new views" or because "it cannot be represented in the first place", both the training views and the
+test views are measured. Each metric is reported both as the value averaged over the statue region (mask) only and
+as the full-frame value (the background is a uniform grey and easy to reproduce, so the full-frame values are
+lenient).
 
     python experiments/gloss/evaluate.py logs/gloss_gold/ckpt_007000.pt logs/gloss_matte/ckpt_007000.pt \
         --masks data/gloss_matte
 
---masks: 像のマスク（*_mask.png）がある学習データ。マスクは形状とカメラだけで決まるので、条件によらず共通。
-出力: experiments/gloss/figures/{test_views,train_views,zoom}.png, experiments/gloss/results.json
+--masks: a training dataset that has the statue masks (*_mask.png). The masks are determined by geometry and cameras
+         only, so they are common to all conditions.
+Output: experiments/gloss/figures/{test_views,train_views,zoom}.png, experiments/gloss/results.json
 """
 
 import argparse
@@ -33,8 +37,8 @@ from gs.gaussians import GaussianModel  # noqa: E402
 from gs.loss import ssim_map  # noqa: E402
 from gs.render import render  # noqa: E402
 
-SHOW = {"test": (0, 3, 6), "train": (0, 40, 75)}  # 図に載せる視点
-ZOOM_VIEW, ZOOM_SIZE, ZOOM_SCALE = 0, 56, 4        # 拡大図: テスト視点 0 の 56px 四方を 4 倍に
+SHOW = {"test": (0, 3, 6), "train": (0, 40, 75)}  # views shown in the figures
+ZOOM_VIEW, ZOOM_SIZE, ZOOM_SCALE = 0, 56, 4        # zoom figure: a 56 px square of test view 0, magnified 4×
 
 
 def load_masks(root, split):
@@ -44,10 +48,10 @@ def load_masks(root, split):
 
 
 def metrics(img, gt, m, lp):
-    """像の領域（マスクで重み付け）と全画面の PSNR / SSIM / LPIPS"""
+    """PSNR / SSIM / LPIPS over the statue region (weighted by the mask) and over the full frame"""
     se = ((img - gt) ** 2).mean(-1)
     s = ssim_map(img, gt).mean(1)[0]
-    l = lp(img.permute(2, 0, 1)[None], gt.permute(2, 0, 1)[None], normalize=True)[0, 0]  # 画素ごとの LPIPS
+    l = lp(img.permute(2, 0, 1)[None], gt.permute(2, 0, 1)[None], normalize=True)[0, 0]  # per-pixel LPIPS
     wavg = lambda x: ((x * m).sum() / m.sum()).item()  # noqa: E731
     return {"psnr": -10 * math.log10(wavg(se)), "ssim": wavg(s), "lpips": wavg(l),
             "psnr_full": -10 * math.log10(se.mean().item()), "ssim_full": s.mean().item(), "lpips_full": l.mean().item()}
@@ -81,12 +85,12 @@ def evaluate(ckpt_path, masks, lp):
 
 
 def sheet(rows, labels, path, note):
-    """rows[r] = [[gt, render, err] × 視点]。パネルの大きさを揃えて並べ、各行に見出しを付ける"""
+    """rows[r] = [[gt, render, err] × views]. Panels are padded to the same size and tiled, with a heading on each row"""
     H = max(p.shape[0] for row in rows for v in row for p in v)
     W = max(p.shape[1] for row in rows for v in row for p in v)
 
     def fit(p):
-        c = np.ones((H, W, 3), np.float32)  # 余白は白（誤差 0 の黒と区別するため）
+        c = np.ones((H, W, 3), np.float32)  # margins are white (to distinguish them from the black of zero error)
         y, x = (H - p.shape[0]) // 2, (W - p.shape[1]) // 2
         c[y:y + p.shape[0], x:x + p.shape[1]] = p
         return c
@@ -107,7 +111,8 @@ def sheet(rows, labels, path, note):
 
 
 def zoom_figure(fulls, names, path):
-    """金で誤差が最も集中する場所を選び、各条件の正解と描画を同じ位置で拡大して並べる"""
+    """Pick the place where the error is most concentrated for gold, and show the ground truth and the render of
+    each condition side by side, magnified at the same position"""
     g = fulls[0]
     err = torch.from_numpy(np.abs(g["img"] - g["gt"]).mean(-1) * g["mask"])[None, None]
     dens = F.avg_pool2d(err, ZOOM_SIZE, stride=4)[0, 0]
@@ -152,8 +157,8 @@ def main():
         for s in rows:
             rows[s].append(panels[s])
 
-    for region, suf in (("像の領域", ""), ("全画面", "_full")):
-        print(f"\n[{region}]  {'条件':<6} {'視点':<5} {'PSNR':>6} {'SSIM':>7} {'LPIPS':>7}")
+    for region, suf in (("statue region", ""), ("full frame", "_full")):
+        print(f"\n[{region}]  {'cond':<6} {'views':<5} {'PSNR':>6} {'SSIM':>7} {'LPIPS':>7}")
         for n in names:
             for s in ("train", "test"):
                 m = summary[n]["mean"][s]

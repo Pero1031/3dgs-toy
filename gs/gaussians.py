@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-ガウシアン群のパラメータと、その「数」を変える処理（densification）。
+Parameters of the set of Gaussians, and the operations that change their number (densification).
 
-各ガウシアンが持つ学習パラメータ（括弧内は描画時の活性化）:
-    means          (N,3)    中心位置
-    log_scales     (N,3)    軸ごとの標準偏差の log          (exp)
-    quats          (N,4)    回転クォータニオン [w,x,y,z]     (正規化)
-    opacity_logits (N,1)    不透明度の logit                 (sigmoid)
-    sh0            (N,1,3)  SH 0 次係数（拡散色）
-    shN            (N,K,3)  SH 1 次以上の係数（視点依存の色）K = (deg+1)^2 - 1
+Trainable parameters of each Gaussian (activation used at render time in parentheses):
+    means          (N,3)    center position
+    log_scales     (N,3)    log of the per-axis standard deviation   (exp)
+    quats          (N,4)    rotation quaternion [w,x,y,z]            (normalize)
+    opacity_logits (N,1)    logit of the opacity                     (sigmoid)
+    sh0            (N,1,3)  degree-0 SH coefficients (diffuse color)
+    shN            (N,K,3)  SH coefficients of degree 1 and above (view-dependent color), K = (deg+1)^2 - 1
 
-densification（論文 Sec.5.2）:
-    画面上の位置勾配が大きい = その付近の再構成が足りていない、とみなして
-      - 小さいガウシアンは複製 (clone)：形状を覆い切れていない領域を埋める
-      - 大きいガウシアンは 2 つに分割 (split)：細部を表現できていない領域を細かくする
-    さらに不透明度がほぼ 0 のもの・大きすぎるものを削除 (prune) する。
-    パラメータの数が変わるので、Adam のモーメントも同じ形に作り直す必要がある。
+densification (paper Sec. 5.2):
+    A large screen-space positional gradient is taken to mean that the reconstruction around it is insufficient, and
+      - small Gaussians are duplicated (clone): fills regions where the shape is not fully covered
+      - large Gaussians are split in two (split): refines regions where details cannot be represented
+    In addition, those with opacity near 0 and those that are too large are removed (prune).
+    The number of parameters changes, so the Adam moments must also be rebuilt to the same shape.
 """
 
 import math
@@ -37,16 +37,18 @@ def inverse_sigmoid(x):
 
 @torch.no_grad()
 def knn_mean_sq_dist(x, k=3, chunk=2048):
-    """各点から最近傍 k 点までの距離の二乗の平均（初期スケールの決定用）"""
+    """Mean squared distance from each point to its k nearest neighbors (used to decide the initial scale)"""
     out = []
     for i in range(0, len(x), chunk):
         d2 = torch.cdist(x[i:i + chunk], x).pow(2)
-        out.append(d2.topk(k + 1, dim=1, largest=False).values[:, 1:].mean(1))  # 先頭は自分自身
+        out.append(d2.topk(k + 1, dim=1, largest=False).values[:, 1:].mean(1))  # the first one is the point itself
     return torch.cat(out)
 
 
 class GaussianModel:
-    names = NAMES  # 学習パラメータの名前。派生クラスで足せる（densification と Adam の作り直しはこの一覧に従う）
+    # Names of the trainable parameters. Subclasses can add to them
+    # (densification and the Adam rebuild follow this list).
+    names = NAMES
 
     def __init__(self, sh_degree=3):
         self.max_sh_degree = sh_degree
@@ -56,7 +58,7 @@ class GaussianModel:
     def __len__(self):
         return self.params["means"].shape[0]
 
-    # ---------------------------------------------------------------- 活性化後の値
+    # ---------------------------------------------------------------- activated values
     @property
     def means(self):
         return self.params["means"]
@@ -73,17 +75,17 @@ class GaussianModel:
     def opacities(self):
         return torch.sigmoid(self.params["opacity_logits"]).squeeze(-1)
 
-    # ---------------------------------------------------------------- 初期化
+    # ---------------------------------------------------------------- initialization
     def init_random(self, n, half_extent, device="cuda", center=(0.0, 0.0, 0.0)):
-        """center を中心とする一辺 2*half_extent の立方体内にランダムに点を置く
-        （公式実装の合成データ用の初期化と同じ方針）"""
+        """Place points at random inside a cube of side 2*half_extent centered at center
+        (same approach as the official implementation's initialization for synthetic data)"""
         xyz = (torch.rand(n, 3, device=device) * 2 - 1) * half_extent + torch.tensor(center, device=device)
         rgb = torch.rand(n, 3, device=device)
         self.init_from_points(xyz, rgb)
 
     def init_from_points(self, xyz, rgb):
         n, dev = len(xyz), xyz.device
-        dist = torch.sqrt(knn_mean_sq_dist(xyz).clamp(min=1e-7))  # 近傍点との間隔くらいの大きさの球にする
+        dist = torch.sqrt(knn_mean_sq_dist(xyz).clamp(min=1e-7))  # make each a sphere about as large as the spacing to its neighbors
         K = (self.max_sh_degree + 1) ** 2 - 1
         self._set({
             "means": xyz,
@@ -100,15 +102,16 @@ class GaussianModel:
 
     def _reset_stats(self):
         n, dev = len(self), self.means.device
-        self.grad_accum = torch.zeros(n, device=dev)   # 画面上の位置勾配ノルムの累積
-        self.denom = torch.zeros(n, device=dev)        # 画面に映った回数
-        self.max_radii2d = torch.zeros(n, device=dev)  # 画面上の最大半径 [px]
+        self.grad_accum = torch.zeros(n, device=dev)   # accumulated norm of the screen-space positional gradient
+        self.denom = torch.zeros(n, device=dev)        # number of times it appeared on screen
+        self.max_radii2d = torch.zeros(n, device=dev)  # maximum screen-space radius [px]
 
-    # ---------------------------------------------------------------- 最適化
+    # ---------------------------------------------------------------- optimization
     def setup_optimizer(self, spatial_scale, lr_means=1.6e-4, lr_means_final=1.6e-6,
                         lr_sh=2.5e-3, lr_opacity=0.05, lr_scale=5e-3, lr_rot=1e-3, extra_lrs=None):
-        """学習率は公開当初の公式実装の既定値。位置の学習率だけシーンの大きさに比例させ、指数減衰させる。
-        extra_lrs は派生クラスで足したパラメータの学習率 {名前: 学習率}"""
+        """Learning rates are the defaults of the official implementation as first released. Only the position
+        learning rate is made proportional to the scene size and decayed exponentially.
+        extra_lrs gives the learning rates of parameters added by subclasses {name: learning rate}"""
         self.lr_means_init = lr_means * spatial_scale
         self.lr_means_final = lr_means_final * spatial_scale
         lrs = {"means": self.lr_means_init, "sh0": lr_sh, "shN": lr_sh / 20,
@@ -124,7 +127,8 @@ class GaussianModel:
                 g["lr"] = lr
 
     def _replace(self, name, tensor, state_fn):
-        """パラメータ name を tensor に差し替え、Adam の 1 次・2 次モーメントも state_fn で同じ形にする。"""
+        """Replace parameter name with tensor, and bring Adam's first and second moments to the same shape
+        with state_fn."""
         new = nn.Parameter(tensor.contiguous())
         if self.optimizer is not None:
             group = next(g for g in self.optimizer.param_groups if g["name"] == name)
@@ -140,7 +144,7 @@ class GaussianModel:
         for k in self.names:
             e = extra[k]
             self._replace(k, torch.cat([self.params[k].detach(), e]),
-                          lambda s, e=e: torch.cat([s, torch.zeros_like(e)]))  # 新しい点のモーメントは 0
+                          lambda s, e=e: torch.cat([s, torch.zeros_like(e)]))  # moments of the new points are 0
 
     def _keep(self, mask):
         for k in self.names:
@@ -149,10 +153,10 @@ class GaussianModel:
     # ---------------------------------------------------------------- densification
     @torch.no_grad()
     def add_densification_stats(self, grad2d, ids, radius, W, H):
-        """1 回の描画ぶんの統計を足し込む。grad2d は画素座標での ∂L/∂μ' (len(ids), 2)。
+        """Accumulate the statistics of one render. grad2d is ∂L/∂μ' in pixel coordinates (len(ids), 2).
 
-        公式実装は NDC 座標（画面幅が 2）での勾配を見て閾値 0.0002 と比べるので、
-        画素 -> NDC の換算 (W/2, H/2) を掛けて揃える。
+        The official implementation looks at the gradient in NDC coordinates (screen width is 2) and compares it
+        with the threshold 0.0002, so we multiply by the pixel -> NDC conversion (W/2, H/2) to match.
         """
         scale = torch.tensor([0.5 * W, 0.5 * H], device=grad2d.device)
         self.grad_accum[ids] += (grad2d * scale).norm(dim=-1)
@@ -170,14 +174,16 @@ class GaussianModel:
         split_mask = (grads >= grad_thresh) & is_big
         big_screen = self.max_radii2d > max_screen_size if max_screen_size else None
 
-        # clone: 同じ位置にそのまま複製（深度順で前後が決まるので、以後の勾配で別々に動いていく）
+        # clone: duplicate as is at the same position (depth order decides which one is in front,
+        # so later gradients move them apart)
         new = {k: v[clone_mask] for k, v in self.params.items()}
 
         split = self._split_children(split_mask, size_thresh)
 
         self._append({k: torch.cat([new[k], split[k]]) for k in self.names})
 
-        # prune: split の元、ほぼ透明なもの、（opacity reset 後は）大きすぎるもの
+        # prune: the originals of a split, nearly transparent ones,
+        # and (after an opacity reset) ones that are too large
         pad = torch.zeros(len(self) - n0, dtype=torch.bool, device=self.means.device)
         prune = torch.cat([split_mask, pad]) | (self.opacities < min_opacity)
         if big_screen is not None:
@@ -188,11 +194,11 @@ class GaussianModel:
         return int(clone_mask.sum()), int(split_mask.sum()), int(prune.sum())
 
     def _is_big(self, size_thresh):
-        """clone ではなく split するもの（派生クラスで条件を足せる）"""
+        """Those to split rather than clone (subclasses can add conditions)"""
         return self.scales.max(dim=1).values > size_thresh
 
     def _split_children(self, split_mask, size_thresh, ns=2):
-        """split: 元のガウシアンの分布から位置を ns 個サンプルし、1/1.6 に縮めた複製を置く"""
+        """split: sample ns positions from the original Gaussian's distribution and place copies shrunk by 1/1.6"""
         split = {k: v[split_mask].repeat(ns, *[1] * (v.dim() - 1)) for k, v in self.params.items()}
         std = self.scales[split_mask].repeat(ns, 1)
         R = quat_to_rotmat(self.quats[split_mask]).repeat(ns, 1, 1)
@@ -202,16 +208,16 @@ class GaussianModel:
 
     @torch.no_grad()
     def reset_opacity(self, value=0.01):
-        """不透明度を一斉に小さくする（論文 Sec.5.2）。
+        """Lower all opacities at once (paper Sec. 5.2).
 
-        カメラ近くに浮いた「ゴミ」ガウシアンは、本当に必要なら最適化で不透明度が戻り、
-        不要なら戻らずに prune される。
+        "Junk" Gaussians floating near the cameras (floaters) get their opacity back through optimization if they
+        are really needed. If not, it does not come back and they are pruned.
         """
         cap = inverse_sigmoid(torch.tensor(value, device=self.means.device))
         self._replace("opacity_logits", torch.minimum(self.params["opacity_logits"].detach(), cap),
                       torch.zeros_like)
 
-    # ---------------------------------------------------------------- 保存・読み込み
+    # ---------------------------------------------------------------- save / load
     def state_dict(self):
         return {"max_sh_degree": self.max_sh_degree,
                 "params": {k: v.detach().cpu() for k, v in self.params.items()}}
@@ -224,11 +230,11 @@ class GaussianModel:
 
     @torch.no_grad()
     def save_ply(self, path):
-        """公式実装と同じ形式の .ply（SuperSplat などの 3DGS ビューアで開ける）"""
+        """.ply in the same format as the official implementation (opens in 3DGS viewers such as SuperSplat)"""
         p = {k: v.detach().cpu() for k, v in self.params.items()}
         n = len(self)
         f_dc = p["sh0"].transpose(1, 2).reshape(n, -1)
-        f_rest = p["shN"].transpose(1, 2).reshape(n, -1)  # チャンネルごとにまとめる (R...,G...,B...)
+        f_rest = p["shN"].transpose(1, 2).reshape(n, -1)  # grouped per channel (R...,G...,B...)
         cols = [p["means"], torch.zeros(n, 3), f_dc, f_rest, p["opacity_logits"], p["log_scales"], p["quats"]]
         data = torch.cat(cols, 1).numpy().astype("<f4")
         names = (["x", "y", "z", "nx", "ny", "nz"]

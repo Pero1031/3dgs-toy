@@ -1,24 +1,28 @@
 # -*- coding: utf-8 -*-
 """
-学習したガウシアンの動きを、おもちゃデータの正解の動きと突き合わせる。
+Compare the motion of the trained Gaussians against the true motion of the toy data.
 
-make_toy_dynamic.py のシーンは動きの式が分かっている。物体に付いた点 x の、時刻 t0 から t1 への移動 Φ は:
-    球     中心からの向きを保って、中心と半径だけ変わる   Φ(x) = c(t1) + (r(t1)/r(t0)) (x - c(t0))
-    立方体 平行移動                                       Φ(x) = x + b(t1) - b(t0)
-画像の再現度（PSNR）が高くても、ガウシアンが物体と一緒に動いているとは限らない。ここでは位置を直接比べる。
+The scenes of make_toy_dynamic.py have a known formula for the motion. The displacement Φ of a point x attached to
+an object, from time t0 to t1, is:
+    sphere  the direction from the centre is kept; only centre and radius change   Φ(x) = c(t1) + (r(t1)/r(t0)) (x - c(t0))
+    cube    translation                                                            Φ(x) = x + b(t1) - b(t0)
+Even when the reconstruction quality of the images (PSNR) is high, the Gaussians do not necessarily move together
+with the object. Here the positions are compared directly.
 
-時刻 t に面の近く（|符号付き距離| < --tol）にあるガウシアン i について、Δ だけ後の位置を比べる:
-    err   = |p_i(t+Δ) - Φ(p_i(t))|       動きの誤差
-    move  = |Φ(p_i(t)) - p_i(t)|         正解の移動量（＝まったく動かさないモデルの誤差）
-    ratio = Σ w err / Σ w move           0 なら正解どおり、1 なら動かさないのと同じ
-重み w は 2 つの時刻の実効不透明度の幾何平均。時刻を持つガウシアン（--spacetime）は Δ が時間幅より
-長いと消えているので、残っている割合 alive = Σ w / Σ w(t) も出す（変形場のモデルは常に 1）。
+For a Gaussian i that is near a surface (|signed distance| < --tol) at time t, the position Δ later is compared:
+    err   = |p_i(t+Δ) - Φ(p_i(t))|       motion error
+    move  = |Φ(p_i(t)) - p_i(t)|         true displacement (= the error of a model that does not move at all)
+    ratio = Σ w err / Σ w move           0 means exactly right, 1 means the same as not moving
+The weight w is the geometric mean of the effective opacities at the two times. Gaussians that have a time
+(--spacetime) have disappeared when Δ is longer than their temporal width, so the fraction that remains,
+alive = Σ w / Σ w(t), is also reported (always 1 for the deformation-field model).
 
-err と move は、面の法線方向と接線方向にも分けて出す（ratio_n, ratio_t）。一様な色の面の上では、
-接線方向に滑っても画像は変わらないので、接線方向の動きは画像からは決まらない。
+err and move are also reported split into the surface normal and tangential directions (ratio_n, ratio_t). On a
+uniformly coloured surface, sliding in the tangential direction does not change the image, so the tangential motion
+is not determined by the images.
 
-物体がそもそも表せているかは cover で見る: 正解の面の上の点から、いちばん近い（実効不透明度 > 0.1 の）
-ガウシアンまでの距離の平均。物体が消えていると大きくなる。
+Whether the object is represented at all is checked with cover: the mean distance from points on the true surface
+to the nearest Gaussian (with effective opacity > 0.1). It becomes large when the object has disappeared.
 
     python experiments/dynamic/motion_eval.py --ckpts logs/dyn_toy/ckpt_007000.pt logs/dyn_toy_st/ckpt_007000.pt
     python experiments/dynamic/motion_eval.py --orbit --ckpts logs/dyn_orbit/ckpt_005000.pt ...
@@ -44,9 +48,9 @@ OBJS = ("sphere", "cube")
 DELTAS = (0.025, 0.1, 0.25, 0.5)
 
 
-# ---------------------------------------------------------------- 正解の形と動き
+# ---------------------------------------------------------------- True shape and motion
 def sdf(x, t, orbit):
-    """(N,3) -> 球と立方体への符号付き距離 (N,2)"""
+    """(N,3) -> signed distances to the sphere and the cube (N,2)"""
     c, r, b = toy.scene(t, orbit)
     d_s = np.linalg.norm(x - c, axis=1) - r
     q = np.abs(x - b) - toy.BOX_H
@@ -55,7 +59,7 @@ def sdf(x, t, orbit):
 
 
 def normal(x, obj, t, orbit, eps=1e-4):
-    """いちばん近い物体の符号付き距離の勾配（面の法線）"""
+    """Gradient of the signed distance of the nearest object (the surface normal)"""
     g = np.zeros_like(x)
     for a in range(3):
         e = np.zeros(3)
@@ -65,7 +69,7 @@ def normal(x, obj, t, orbit, eps=1e-4):
 
 
 def flow(x, obj, t0, t1, orbit):
-    """物体 obj（0: 球, 1: 立方体）に付いた点 x の、t0 から t1 への移動先"""
+    """Where a point x attached to object obj (0: sphere, 1: cube) moves to from t0 to t1"""
     c0, r0, b0 = toy.scene(t0, orbit)
     c1, r1, b1 = toy.scene(t1, orbit)
     on_sphere = c1 + (r1 / r0) * (x - c0)
@@ -73,7 +77,7 @@ def flow(x, obj, t0, t1, orbit):
 
 
 def surface_points(t, orbit, n=2000, seed=0):
-    """正解の面の上の点（球, 立方体）"""
+    """Points on the true surfaces (sphere, cube)"""
     rng = np.random.default_rng(seed)
     c, r, b = toy.scene(t, orbit)
     v = rng.normal(size=(n, 3))
@@ -84,7 +88,7 @@ def surface_points(t, orbit, n=2000, seed=0):
     return s, b + toy.BOX_H * q
 
 
-# ---------------------------------------------------------------- 学習したモデル
+# ---------------------------------------------------------------- Trained models
 class Run:
     def __init__(self, path, dev):
         ck = torch.load(path, map_location=dev, weights_only=False)
@@ -106,7 +110,7 @@ class Run:
 
     @torch.no_grad()
     def at(self, t):
-        """時刻 t の位置 (N,3) と実効不透明度 (N,)"""
+        """Positions (N,3) and effective opacities (N,) at time t"""
         m = self.model
         x, w = m.params["means"], m.opacities
         if self.kind == "spacetime":
@@ -124,7 +128,7 @@ def evaluate(run, orbit, tol, n_t=41):
     state = [run.at(t) for t in ts]
     res = {"kind": run.kind, "n_gauss": len(run.model)}
 
-    # 物体が表せているか: 正解の面からいちばん近いガウシアンまでの距離
+    # Is the object represented: distance from the true surface to the nearest Gaussian
     cover = np.zeros((n_t, 2))
     for k, t in enumerate(ts):
         x, w = state[k]
@@ -133,11 +137,11 @@ def evaluate(run, orbit, tol, n_t=41):
             cover[k, o] = torch.cdist(torch.as_tensor(pts), x).min(1).values.mean() if len(x) else np.inf
     res["cover"] = dict(zip(OBJS, cover.mean(0).tolist()))
 
-    # 動きの誤差
+    # Motion error
     res["motion"] = {}
     for delta in DELTAS:
         step = int(round(delta * (n_t - 1)))
-        acc = np.zeros((2, 8))   # 物体ごとに Σ w {err, move, 1}, Σ w(t), Σ w {err, move} の法線・接線成分
+        acc = np.zeros((2, 8))   # per object: Σ w {err, move, 1}, Σ w(t), and the normal / tangential components of Σ w {err, move}
         for k in range(n_t - step):
             (x0, w0), (x1, w1) = state[k], state[k + step]
             d = sdf(x0, ts[k], orbit)
@@ -170,8 +174,8 @@ def evaluate(run, orbit, tol, n_t=41):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpts", nargs="+", required=True)
-    ap.add_argument("--orbit", action="store_true", help="--orbit で作ったデータ（立方体が半周する）で学習したもの")
-    ap.add_argument("--tol", type=float, default=0.1, help="面からこの距離までのガウシアンを数える")
+    ap.add_argument("--orbit", action="store_true", help="trained on data made with --orbit (the cube travels half a circle)")
+    ap.add_argument("--tol", type=float, default=0.1, help="count Gaussians up to this distance from a surface")
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -185,7 +189,7 @@ def main():
     out.write_text(json.dumps(results, indent=1), encoding="utf-8")
 
     print(f"{'':22s} {'cover':>13s} | " + " | ".join(f"Δ={d:<5} ratio (alive)".center(29) for d in DELTAS))
-    print(f"{'':22s} {'球':>6s} {'立方体':>5s} | " + " | ".join(f"{'球':^13s} {'立方体':^12s}" for _ in DELTAS))
+    print(f"{'':22s} {'sphere':>6s} {'cube':>5s} | " + " | ".join(f"{'sphere':^13s} {'cube':^12s}" for _ in DELTAS))
     for name, r in results.items():
         cells = []
         for d in DELTAS:
@@ -193,10 +197,10 @@ def main():
             cells.append(" ".join(f"{m[o]['ratio']:5.2f} ({m[o]['alive']:4.2f}) " for o in OBJS))
         print(f"{name:22s} {r['cover']['sphere']:6.3f} {r['cover']['cube']:6.3f} | " + " | ".join(cells))
         m = r["motion"]["0.1"]
-        print(f"{'':22s} Δ=0.1 の法線 / 接線: " + "、".join(
-            f"{j} {m[o]['ratio_n']:.2f} / {m[o]['ratio_t']:.2f}" for o, j in zip(OBJS, ("球", "立方体"))))
+        print(f"{'':22s} normal / tangential at Δ=0.1: " + ", ".join(
+            f"{j} {m[o]['ratio_n']:.2f} / {m[o]['ratio_t']:.2f}" for o, j in zip(OBJS, ("sphere", "cube"))))
         if "t_scale_median" in r:
-            print(f"{'':22s} 時間幅 σ_t の中央値 {r['t_scale_median']:.3f}、速さの中央値 {r['speed_median']:.2f}")
+            print(f"{'':22s} median temporal width σ_t {r['t_scale_median']:.3f}, median speed {r['speed_median']:.2f}")
     print(f"-> {out}")
 
 

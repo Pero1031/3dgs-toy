@@ -1,21 +1,26 @@
 # -*- coding: utf-8 -*-
 """
-光沢で 3DGS が破綻するかの検証用データを GoLD_rayt で作る（Erato 像、金 vs 同系色の拡散面）。
+Make the data for testing whether 3DGS breaks down on gloss, using GoLD_rayt (Erato statue, gold vs a diffuse
+surface of a similar colour).
 
-形状・照明・カメラはまったく同じで、像の素材だけが違う 2 条件:
-    gold  : 金（conductor Au, roughness 0.1）。見え方の大半が照明の映り込みで、視点で大きく変わる
-    matte : 金に近い色の拡散面。見え方は視点によらない（対照）
+Two conditions with exactly the same geometry, lighting, and cameras, differing only in the material of the statue:
+    gold  : gold (conductor Au, roughness 0.1). Most of the appearance is reflection of the lighting, and it changes
+            greatly with the view
+    matte : diffuse, with a colour close to gold. The appearance does not depend on the view (control)
 
-照明とカメラの配置は D:/GoLD_rayt/out/studies/gs_gloss/make_views.py の v2
-（上のソフトボックス + 周りの球光源 4 つ、床なし、像の周り 3 段のリング）にそろえ、暗い一様な環境光を足した。
-環境光があるので金の映り込みが真っ黒になって背景と見分けられなくなる部分がなく、
-背景はどの視点でも同じ一様な色になる（学習では --bg でその色を与える）。
+The lighting and camera layout follow v2 of D:/GoLD_rayt/out/studies/gs_gloss/make_views.py
+(a softbox above + 4 sphere lights around, no floor, 3 rings of cameras around the statue), with dim uniform
+ambient light added.
+With the ambient light, there are no parts where the reflection on the gold becomes pure black and cannot be told
+apart from the background, and the background is the same uniform colour in every view (in training, that colour is
+given with --bg).
 
     python experiments/gloss/make_views.py gold  --render
     python experiments/gloss/make_views.py matte --render
 
--> data/gloss_<variant>/ に scenes/*.json、{train,test}/*.png（学習には *_denoised.png を使う）、
-   像のマスク（*_mask.png。形状とカメラだけで決まるので、どの条件のものでも同じ）、transforms_{train,test}.json
+-> in data/gloss_<variant>/: scenes/*.json, {train,test}/*.png (*_denoised.png is used for training),
+   statue masks (*_mask.png. They are determined by geometry and cameras only, so they are the same for every
+   condition), transforms_{train,test}.json
 """
 
 import argparse
@@ -26,14 +31,14 @@ import subprocess
 import time
 from pathlib import Path
 
-EXE = r"D:\GoLD_rayt\out\cli-dev\GoLD_rayt.exe"   # RGB 版
-CWD = r"D:\GoLD_rayt\GoLD_rayt"                     # シーン内の相対パスの基準
+EXE = r"D:\GoLD_rayt\out\cli-dev\GoLD_rayt.exe"   # RGB version
+CWD = r"D:\GoLD_rayt\GoLD_rayt"                     # base for relative paths in the scene
 ROOT = Path(__file__).resolve().parents[2]          # 3dgs-toy/
 
-TARGET = [0.0, 0.25, 0.0]   # 像の中心（高さ 0.50 m、y = 0..0.50）。ワールドは +Y が上
-RADIUS = 1.3                # カメラの距離
-FOV = 30.0                  # 度。正方形の画像なので水平・垂直とも同じ
-ENV_SCALE = 0.15            # 一様な環境光の明るさ
+TARGET = [0.0, 0.25, 0.0]   # centre of the statue (height 0.50 m, y = 0..0.50). The world has +Y up
+RADIUS = 1.3                # camera distance
+FOV = 30.0                  # degrees. The image is square, so horizontal and vertical are the same
+ENV_SCALE = 0.15            # brightness of the uniform ambient light
 
 MATERIALS = {
     "gold": {"type": "conductor", "metal": "Au", "roughness": 0.1},
@@ -49,7 +54,7 @@ def cam_from(elev_deg, azim_deg):
 
 
 def c2w(frm):
-    """camera-to-world（OpenGL 流儀: カメラは -z を向き、y が画面上）"""
+    """camera-to-world (OpenGL convention: the camera looks along -z and y is up on screen)"""
     z = [frm[i] - TARGET[i] for i in range(3)]
     n = math.sqrt(sum(v * v for v in z))
     z = [v / n for v in z]
@@ -93,8 +98,8 @@ def main():
     ap.add_argument("--spp", type=int, default=512)
     ap.add_argument("--train-per-ring", type=int, default=30)
     ap.add_argument("--test", type=int, default=10)
-    ap.add_argument("--render", action="store_true", help="シーンを書いたあと全視点を描画する（描画済みは飛ばす）")
-    ap.add_argument("--limit", type=int, default=None, help="描画する視点数の上限（試し描き用）")
+    ap.add_argument("--render", action="store_true", help="render all views after writing the scenes (views already rendered are skipped)")
+    ap.add_argument("--limit", type=int, default=None, help="upper limit on the number of views to render (for trial renders)")
     a = ap.parse_args()
 
     root = ROOT / "data" / f"gloss_{a.variant}"
@@ -107,7 +112,7 @@ def main():
             azim = 360.0 * i / a.train_per_ring + ring * (360.0 / a.train_per_ring) / 3.0
             views.append(("train", f"view_{ring}_{i:03d}", cam_from(elev, azim)))
     rng = random.Random(1)
-    for i in range(a.test):  # テスト視点はリングの間のランダムな方向（学習視点と重ならない）
+    for i in range(a.test):  # test views are random directions between the rings (no overlap with the training views)
         views.append(("test", f"view_{i:03d}", cam_from(rng.uniform(12.0, 65.0), rng.uniform(0.0, 360.0))))
 
     frames = {"train": [], "test": []}
@@ -138,8 +143,8 @@ def main():
             print(msg, flush=True)
             if r.returncode != 0:
                 log.write(r.stderr.decode("utf-8", "replace")[-1000:] + "\n")
-                raise SystemExit(f"描画に失敗: {sc}")
-    print(f"{len(todo)} 視点を {(time.time() - t0) / 60:.1f} 分で描画")
+                raise SystemExit(f"rendering failed: {sc}")
+    print(f"{len(todo)} views rendered in {(time.time() - t0) / 60:.1f} min")
 
 
 if __name__ == "__main__":

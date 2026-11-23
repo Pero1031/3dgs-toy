@@ -1,5 +1,5 @@
-# PyTorch は GPU に合わせて別途インストールする（README参照）。
-# Quadro M4000 (Maxwell, sm_52) は CUDA 11.8 版が対応:
+# Install PyTorch separately to match your GPU (see the README).
+# The Quadro M4000 (Maxwell, sm_52) needs the CUDA 11.8 build:
 #   pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cu118
 numpy
 imageio

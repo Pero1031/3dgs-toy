@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-動作確認用のおもちゃデータセットを生成する（外部データのダウンロード不要）。nerf-toy と同じもの。
+Generate a toy dataset for checking that things work (no external data download needed). Same one as nerf-toy.
 
-原点に置いた半径1の球（表面に経緯線の縞模様）と、その横の小さな立方体を
-numpyで解析的にレイトレースし、Blender形式（transforms_*.json + RGBA PNG）で保存する。
+A sphere of radius 1 at the origin (with a striped pattern of meridians and parallels on its surface) and a small
+cube beside it are ray-traced analytically with numpy and saved in Blender format (transforms_*.json + RGBA PNG).
 
     python make_toy_dataset.py --out data/toy_sphere
 """
@@ -19,7 +19,7 @@ from gs.poses import look_at_origin
 
 LIGHT = np.array([0.4, -0.5, 0.75])
 LIGHT = LIGHT / np.linalg.norm(LIGHT)
-BOX_C, BOX_H = np.array([0.0, 1.4, -0.4]), 0.4  # 立方体の中心と半辺長
+BOX_C, BOX_H = np.array([0.0, 1.4, -0.4]), 0.4  # center and half side length of the cube
 
 
 def render(c2w, H, W, focal):
@@ -29,14 +29,14 @@ def render(c2w, H, W, focal):
     d /= np.linalg.norm(d, axis=-1, keepdims=True)
     o = np.broadcast_to(c2w[:3, 3], d.shape)
 
-    # 球との交差
+    # Intersection with the sphere
     b = (o * d).sum(-1)
     c = (o * o).sum(-1) - 1.0
     disc = b * b - c
     t_s = np.where(disc > 0, -b - np.sqrt(np.maximum(disc, 0)), np.inf)
     t_s = np.where(t_s > 0, t_s, np.inf)
 
-    # 軸平行な立方体との交差（slab法）
+    # Intersection with the axis-aligned cube (slab method)
     with np.errstate(divide="ignore", invalid="ignore"):
         t1 = (BOX_C - BOX_H - o) / d
         t2 = (BOX_C + BOX_H - o) / d
@@ -72,9 +72,11 @@ def render(c2w, H, W, focal):
 
 
 def render_aa(c2w, H, W, focal, s, *args):
-    """1 画素を s×s 本のレイで描いて平均する（輪郭と模様の境目のギザギザを消す）。s=1 なら render と同じ。
+    """Render one pixel with s×s rays and average them (removes the aliased (staircase) edges at silhouettes and
+    pattern boundaries). Same as render when s=1.
 
-    色は不透明度を掛けてから平均し、平均した不透明度で割り戻す（PNG の RGBA は掛けていない色を持つので）。
+    Colors are multiplied by opacity before averaging, then divided back by the averaged opacity
+    (because PNG RGBA holds non-premultiplied color).
     """
     if s == 1:
         return render(c2w, H, W, focal, *args)
@@ -92,7 +94,7 @@ def main():
     ap.add_argument("--n-train", type=int, default=60)
     ap.add_argument("--n-val", type=int, default=8)
     ap.add_argument("--supersample", type=int, default=4,
-                    help="1 画素を何×何本のレイで描いて平均するか（1 だと輪郭がギザギザになり、ガウシアンでは再現できない）")
+                    help="render each pixel with N×N rays and average them (with 1, silhouettes get aliased (staircase) edges that Gaussians cannot reproduce)")
     ap.add_argument("--radius", type=float, default=4.0)
     args = ap.parse_args()
 
@@ -105,7 +107,7 @@ def main():
         frames = []
         for k in range(n):
             if split == "train":
-                az, el = rng.uniform(0, 360), rng.uniform(5, 80)  # 上半球からランダム
+                az, el = rng.uniform(0, 360), rng.uniform(5, 80)  # random over the upper hemisphere
             else:
                 az, el = 360.0 * k / n + 15.0, 30.0
             c2w = look_at_origin(az, el, args.radius)
@@ -114,7 +116,7 @@ def main():
             frames.append({"file_path": f"./{split}/r_{k}", "transform_matrix": c2w.tolist()})
         with open(args.out / f"transforms_{split}.json", "w", encoding="utf-8") as f:
             json.dump({"camera_angle_x": float(fov), "frames": frames}, f, indent=2)
-        print(f"{split}: {n}枚 -> {args.out / split}")
+        print(f"{split}: {n} images -> {args.out / split}")
 
 
 if __name__ == "__main__":

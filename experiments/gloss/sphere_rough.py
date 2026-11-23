@@ -1,39 +1,53 @@
 # -*- coding: utf-8 -*-
 """
-段階 2 のオラクル: 条件を制御した球（make_sphere.py）で、点ごとに最適化したぼけ（粗さ）と、
-画素の中の法線のばらつきから換算したぼけを比べる（3DGS を使わない検証。env_rough.py の球版）。
+Oracle for stage 2: on a sphere with controlled conditions (make_sphere.py), compare the blur (roughness) optimized
+per point with the blur converted from the normal variation within a pixel (a check that does not use 3DGS. The sphere
+version of env_rough.py).
 
-問い
-    1. 凹凸が画素より細かいとき、点ごとに最適化したぼけは Toksvig の換算 σ_r = 2σ_n に合うか
-    2. 画素の大きさ（512 / 256 / 128 px）を変えると、最適なぼけは「画素の中のばらつき」の変化に従うか
-    3. 材質の粗さ（GGX α）によるぼけは、どの幅のガウスに当たるか（brdf の区画）
+Questions
+    1. When the bumps are finer than a pixel, does the blur optimized per point agree with Toksvig's conversion
+       σ_r = 2σ_n?
+    2. When the pixel size (512 / 256 / 128 px) is changed, does the optimal blur follow the change in "the variation
+       within a pixel"?
+    3. What width of Gaussian does the blur due to material roughness (GGX α) correspond to? (the brdf sectors)
 
-モデル（どれも共有の照明 SH 48 次 + 点ごとの定数。解き方は env_rough.py と同じ）
-    material      σ = 0。法線は点ごとの足跡で平均した向き（以下のモデルも、measured_obs 以外は同じ法線）
-    measured_pt   点ごとの足跡（接平面で等方。1 軸あたり、画素の箱型と、観測を拾う双線形補間の三角形を合わせた広がり、
-                  幅はその点を見る学習視点の平均の奥行きでの 1 画素）で法線を平均し、σ = 2√(1 − |n̄|)。像の measured と同じ
-    measured_obs  観測ごとに、その画素の足跡（画像面の箱型 ⊗ 三角形を球面に投影したもの。斜めから見ると伸びる）で
-                  法線を平均し、その向きで反射させ、σ = 2√(1 − |n̄|) でぼかす。Toksvig 流の前処理の理想形
-    measured_obs_aniso  measured_obs の σ を √((1 + cos²θ)/2) 倍する（θ は視線と平均法線の角）。法線を入射面の中で
-                  δ 傾けると反射方向は 2δ 曲がるが、入射面に垂直に傾けると 2δ cosθ しか曲がらない。その 2 軸の
-                  分散の平均に当たる等方のぼけ
-    supersampled  ぼけの近似を使わない厳密なモデル。観測ごとに、足跡のサンプル（SUPER_SAMPLES 個）の法線で
-                  それぞれ反射させた方向の SH を平均して、照明に掛ける。等方なガウスでぼかすモデルの上限
-    fitted        点ごとに σ を格子から選ぶ（照明と交互に解く）。既存手法が学習する粗さの代わり
-    sh6           点ごとの SH 6 次（参考）
+Models (all of them: shared lighting of SH degree 48 + per-point constant. The solver is the same as in env_rough.py)
+    material      σ = 0. The normal is the direction averaged over the per-point footprint (the models below use the
+                  same normal, except measured_obs)
+    measured_pt   Average the normals over the per-point footprint (isotropic on the tangent plane. Per axis, the
+                  spread that combines the pixel box and the triangle of the bilinear interpolation used when picking
+                  up observations; the width is one pixel at the mean depth of the training views that see the point),
+                  and set σ = 2√(1 − |n̄|). Same as measured for the statue
+    measured_obs  For each observation, average the normals over the footprint of that pixel (box ⊗ triangle on the
+                  image plane, projected onto the sphere. It stretches at oblique viewing), reflect about that
+                  direction, and blur with σ = 2√(1 − |n̄|). The ideal form of Toksvig-style prefiltering
+    measured_obs_aniso  Multiply the σ of measured_obs by √((1 + cos²θ)/2) (θ is the angle between the view direction
+                  and the mean normal). Tilting the normal by δ within the plane of incidence turns the reflection
+                  direction by 2δ, but tilting it perpendicular to the plane of incidence turns it by only 2δ cosθ.
+                  This is the isotropic blur that corresponds to the mean of the variances of those 2 axes
+    supersampled  An exact model that does not use the blur approximation. For each observation, reflect about the
+                  normal of each footprint sample (SUPER_SAMPLES of them), average the SH of those directions, and
+                  multiply by the lighting. The upper limit for models that blur with an isotropic Gaussian
+    fitted        Choose σ per point from a grid (solved alternately with the lighting). A stand-in for the roughness
+                  that existing methods learn
+    sh6           Per-point SH of degree 6 (reference)
 
-法線は凹凸の解析的な式から求める（レンダラーは頂点法線を補間するので、傾きは約 3% 小さい。make_sphere.py mesh の検算）。
-凹凸による位置のずれ（最大 1.3 mm）は投影では無視し、基準の球面で扱う。
+The normals are computed from the analytic expression for the bumps (the renderer interpolates vertex normals, so the
+tilt is about 3% smaller. See the check in make_sphere.py mesh).
+The position shift due to the bumps (at most 1.3 mm) is ignored in the projection, and the reference sphere is used.
 
-区画の扱い: brdf の区画は形がなめらかで、measured は材質の粗さを知らないので、モデルの比較は smooth と bump の
-5 区画の点だけで行う。brdf の区画の最適なぼけは、全区画の点で fitted を解き直して求める。
+Handling of the sectors: the brdf sectors are smooth in shape, and measured does not know the material roughness, so
+the models are compared only on the points of the 5 smooth and bump sectors. The optimal blur of the brdf sectors is
+obtained by solving fitted again on the points of all sectors.
 
     python experiments/gloss/sphere_rough.py [--scales 512 256 128] [--no-denoised-check]
 
-ほかに、measured_obs の σ を一律に k 倍したときの誤差（最適な倍率）と、supersampled の平均した SH が
-Y(n̄)·exp(−l(l+1)σ²/2) に当たるとしたときの等価な σ（l = 4 と 12）も記録する。
+In addition, the error when the σ of measured_obs is multiplied uniformly by k (the best scale factor) and the
+equivalent σ obtained by assuming that the averaged SH of supersampled corresponds to Y(n̄)·exp(−l(l+1)σ²/2)
+(l = 4 and 12) are also recorded.
 
-出力: experiments/gloss/sphere_rough.json、data/gloss_sphere/sphere_rough_points.npz（点ごとの値。図を描き直す用）
+Output: experiments/gloss/sphere_rough.json, data/gloss_sphere/sphere_rough_points.npz (per-point values, for
+redrawing the figures)
 """
 
 import argparse
@@ -55,21 +69,25 @@ import make_sphere as ms  # noqa: E402
 import sh_oracle as so  # noqa: E402
 
 DEV = er.DEV
-N_PER_SECTOR = 800       # 区画ごとの点の数
-LAT_MAX = 50.0           # 緯度がこれを超える点は使わない（凹凸を弱める範囲と極を避ける）
-BORDER_MARGIN = 7.0      # 区画の境目からこれ以上離れた点だけ使う [度]（つなぎの幅 4° と足跡の広がりを避ける）
-FP_SAMPLES = 512         # 足跡の中で法線を平均するサンプル数
-SUPER_SAMPLES = 64       # supersampled で反射方向の SH を平均するサンプル数（FP_SAMPLES の先頭。Sobol 列なので偏らない）
-K_SCAN = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]  # measured_obs の σ に掛ける倍率の候補
-EQUIV_L = [4, 12]        # 等価な σ を読む SH の次数
-LP, S = 0, 0.1           # 点ごとの項の次数、照明のなめらかさの罰（env_rough.py で粗さの比較に使った設定）
+N_PER_SECTOR = 800       # number of points per sector
+LAT_MAX = 50.0           # points with latitude above this are not used (avoids the range where the bumps are
+                         # weakened, and the poles)
+BORDER_MARGIN = 7.0      # use only points at least this far from the sector boundaries [degrees] (avoids the 4°
+                         # blend width and the spread of the footprint)
+FP_SAMPLES = 512         # number of samples for averaging the normals within the footprint
+SUPER_SAMPLES = 64       # number of samples for averaging the SH of the reflection directions in supersampled
+                         # (the first ones of FP_SAMPLES. It is a Sobol sequence, so they are not biased)
+K_SCAN = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]  # candidate scale factors for the σ of measured_obs
+EQUIV_L = [4, 12]        # SH degrees at which the equivalent σ is read
+LP, S = 0, 0.1           # degree of the per-point term, smoothness penalty of the lighting (settings used for the
+                         # roughness comparison in env_rough.py)
 SH_DEG = 6
-GEOM = [k for k, (_, _, mat) in enumerate(ms.SECTORS) if mat == "au"]  # smooth と bump の区画
+GEOM = [k for k, (_, _, mat) in enumerate(ms.SECTORS) if mat == "au"]  # the smooth and bump sectors
 SEED = 3
 OUT_NPZ = ms.DATA / "sphere_rough_points.npz"
 
 
-# ---- 画像とカメラ ----
+# ---- Images and cameras ----
 
 def read_pfm(path):
     with open(path, "rb") as fh:
@@ -81,8 +99,9 @@ def read_pfm(path):
 
 
 def load_split(split, scale, denoised):
-    """表示値の画像 (V, S, S, 3) と、3x3 で収縮したマスク (V, S, S)。縮小は放射輝度で平均してから表示値に直す
-    （画素が大きいカメラで撮ったのと同じ）。視点の並びは make_sphere.views() の順"""
+    """Display-value images (V, S, S, 3) and masks eroded by 3x3 (V, S, S). Downscaling averages in radiance and then
+    converts to display values (the same as shooting with a camera with larger pixels).
+    The views are in the order of make_sphere.views()"""
     k = ms.SIZE // scale
     names = [(n, frm) for s, n, frm in ms.views() if s == split]
     img, msk = [], []
@@ -100,7 +119,7 @@ def load_split(split, scale, denoised):
 class Cam:
     def __init__(self, frm, scale):
         c2w = np.array(ms.c2w(frm))
-        Rcv = c2w[:3, :3] @ np.diag([1.0, -1.0, -1.0])   # OpenCV 流儀: x 右、y 下、z 前
+        Rcv = c2w[:3, :3] @ np.diag([1.0, -1.0, -1.0])   # OpenCV convention: x right, y down, z forward
         self.Rc2w = torch.tensor(Rcv, dtype=torch.float32, device=DEV)
         self.o = torch.tensor(frm, dtype=torch.float32, device=DEV)
         self.f = (scale / 2) / math.tan(math.radians(ms.FOV / 2))
@@ -112,7 +131,7 @@ class Cam:
         return self.f * pc[..., 0] / pc[..., 2] + self.c, self.f * pc[..., 1] / pc[..., 2] + self.c, pc[..., 2]
 
     def hit_sphere(self, u, v):
-        """画素の位置 (u, v) を通る光線と基準の球の、手前の交点の法線 n0"""
+        """Normal n0 at the near intersection of the ray through pixel position (u, v) with the reference sphere"""
         d = torch.stack([(u - self.c) / self.f, (v - self.c) / self.f, torch.ones_like(u)], -1) @ self.Rc2w.T
         d = F.normalize(d, dim=-1)
         b = (d * self.o).sum(-1)
@@ -121,14 +140,15 @@ class Cam:
         return F.normalize(X, dim=-1)
 
 
-# ---- 凹凸の法線（make_sphere.surface の torch 版。区画の中ほどだけを使うので振幅は点ごとの定数） ----
+# ---- Normals of the bumps (torch version of make_sphere.surface. Only the middle of each sector is used,
+# so the amplitude is a per-point constant) ----
 
 FREQ = torch.tensor(ms.FREQ, dtype=torch.float32, device=DEV)
 PHASE = torch.tensor(ms.PHASE, dtype=torch.float32, device=DEV)
 
 
 def normals(n0, a, chunk=1 << 17):
-    """基準の球の法線 n0 (m, 3) の所の、凹凸をつけた表面の法線。a (m,) は振幅 [m]"""
+    """Normal of the bumpy surface at the reference-sphere normal n0 (m, 3). a (m,) is the amplitude [m]"""
     out = torch.empty_like(n0)
     c = math.sqrt(2.0 / ms.K_WAVES)
     for i in range(0, len(n0), chunk):
@@ -141,23 +161,26 @@ def normals(n0, a, chunk=1 << 17):
 
 
 def footprint_offsets():
-    """足跡の中のサンプル位置（画素単位、1 軸あたり一様分布 3 つの和 = 箱型 ⊗ 双線形補間の三角形）(M, 2)"""
+    """Sample positions within the footprint (in pixels; per axis, the sum of 3 uniform variables = box ⊗ triangle
+    of the bilinear interpolation) (M, 2)"""
     s = torch.quasirandom.SobolEngine(6, scramble=True, seed=SEED).draw(FP_SAMPLES).to(DEV)
     return torch.stack([s[:, :3].sum(1) - 1.5, s[:, 3:].sum(1) - 1.5], 1)
 
 
 def mean_normal(n0s, a):
-    """足跡のサンプルの基準の法線 n0s (m, M, 3) で凹凸の法線を求めて平均する -> 向き (m, 3)、σ = 2√(1 − |n̄|) (m,)"""
+    """Compute the bump normals at the reference normals n0s (m, M, 3) of the footprint samples and average them
+    -> direction (m, 3), σ = 2√(1 − |n̄|) (m,)"""
     m, M, _ = n0s.shape
     n = normals(n0s.reshape(-1, 3), a[:, None].expand(m, M).reshape(-1)).reshape(m, M, 3).mean(1)
     ln = n.norm(dim=-1).clamp(max=1)
     return n / ln[:, None], 2 * (1 - ln).sqrt()
 
 
-# ---- 点と観測 ----
+# ---- Points and observations ----
 
 def sample_points():
-    """区画ごとに N_PER_SECTOR 点（球面上で一様、境目と高緯度を除く）-> 基準の法線 (n, 3)、区画の番号 (n,)"""
+    """N_PER_SECTOR points per sector (uniform on the sphere, excluding boundaries and high latitudes)
+    -> reference normals (n, 3), sector index (n,)"""
     rng = np.random.default_rng(SEED)
     out, sec = [], []
     need = [N_PER_SECTOR] * len(ms.SECTORS)
@@ -178,7 +201,8 @@ def sample_points():
 
 @torch.no_grad()
 def observe(cams, img, msk, n0, a, offs):
-    """各視点で、点が見えているか・観測（表示値、双線形補間）・視線方向・奥行き・観測ごとの足跡の平均法線とぼけ"""
+    """For each view: whether the point is visible, the observation (display values, bilinear interpolation),
+    the view direction, the depth, and the mean normal and blur of the per-observation footprint"""
     P = ms.R0 * n0
     V, n = len(cams), len(n0)
     vis = torch.zeros(V, n, dtype=torch.bool, device=DEV)
@@ -206,7 +230,8 @@ def observe(cams, img, msk, n0, a, offs):
 
 @torch.no_grad()
 def point_footprint(n0, a, width, offs):
-    """点ごとの等方な足跡（接平面、1 軸あたり画素幅 width [m] の箱型 ⊗ 三角形）で法線を平均する"""
+    """Average the normals over the isotropic per-point footprint (tangent plane; per axis, box ⊗ triangle with
+    pixel width width [m])"""
     t1, t2 = (torch.tensor(t, dtype=torch.float32, device=DEV) for t in ms.tangent_frame(n0.cpu().numpy().astype(np.float64)))
     out_n, out_s = torch.empty_like(n0), torch.empty(len(n0), device=DEV)
     for j in range(0, len(n0), 1024):
@@ -219,7 +244,8 @@ def point_footprint(n0, a, width, offs):
 
 @torch.no_grad()
 def supersampled_Y(cams, vis, dirs, n0, a, offs):
-    """観測ごと（vis.nonzero の順）に、足跡のサンプルの法線でそれぞれ反射させた方向の SH を平均する (n_obs, Ke)"""
+    """For each observation (in the order of vis.nonzero), average the SH of the directions reflected about the
+    normal of each footprint sample (n_obs, Ke)"""
     P = ms.R0 * n0
     M = SUPER_SAMPLES
     out = []
@@ -238,7 +264,8 @@ def supersampled_Y(cams, vis, dirs, n0, a, offs):
 
 
 def equivalent_sigma(Y_sup, Y_mean, l):
-    """平均した SH の次数 l の成分が、平均法線の向きの SH の a_l 倍だとして、a_l = exp(−l(l+1)σ²/2) から σ を読む (n_obs,)"""
+    """Assuming that the degree-l component of the averaged SH is a_l times the SH in the direction of the mean
+    normal, read σ from a_l = exp(−l(l+1)σ²/2) (n_obs,)"""
     m = er.L_OF == l
     a_l = (Y_sup[:, m] * Y_mean[:, m]).sum(1) / (Y_mean[:, m] ** 2).sum(1).clamp(min=1e-12)
     return (-2 * a_l.clamp(1e-4, 1).log() / (l * (l + 1))).clamp(min=0).sqrt()
@@ -250,7 +277,7 @@ def per_point_rms(x, pid, n_pts):
     return (s2 / cnt.clamp(min=1)).sqrt()
 
 
-# ---- 解析 ----
+# ---- Analysis ----
 
 def identifiable(loss):
     rmse = loss.sqrt()
@@ -258,7 +285,7 @@ def identifiable(loss):
 
 
 def sector_psnr(o, pred, sec_pts):
-    """区画ごとの、表示値の PSNR"""
+    """PSNR of display values, per sector"""
     err = ((o.display(pred) - o.ydisp) ** 2).mean(1)
     sec = torch.tensor(sec_pts, device=DEV)[o.pid]
     out = {}
@@ -279,11 +306,11 @@ def run_scale(scale, n0_all, sec_all, a_all, offs, grid, t0, denoised=False, qui
     keep = (data["train"][0].sum(0) >= so.MIN_TRAIN_OBS).cpu().numpy()
     vis_tr, _, _, depth_tr, _, s_obs_tr = data["train"]
     z_mean = (depth_tr * vis_tr).sum(0) / vis_tr.sum(0).clamp(min=1)
-    width = z_mean * 2 * math.tan(math.radians(ms.FOV / 2)) / scale            # 点の所での 1 画素の幅 [m]
+    width = z_mean * 2 * math.tan(math.radians(ms.FOV / 2)) / scale            # width of one pixel at the point [m]
     n_pt, s_pt = point_footprint(n0_all, a_all, width, offs)
     s_obs_rms = ((s_obs_tr ** 2 * vis_tr).sum(0) / vis_tr.sum(0).clamp(min=1)).sqrt()
-    print(f"[{scale} px{'・デノイズ後' if denoised else ''}] 観測と足跡: 点 {keep.sum()} / {len(keep)}、"
-          f"学習の観測 {int(vis_tr[:, keep].sum())}（{time.time() - t0:.0f} 秒）", flush=True)
+    print(f"[{scale} px{', denoised' if denoised else ''}] observations and footprints: points {keep.sum()} / {len(keep)}, "
+          f"training observations {int(vis_tr[:, keep].sum())} ({time.time() - t0:.0f} s)", flush=True)
 
     res = {"pixel_width_mm_median": float(width.median() * 1000)}
     pts = {"keep": keep, "width_mm": width.cpu().numpy() * 1000,
@@ -299,19 +326,19 @@ def run_scale(scale, n0_all, sec_all, a_all, offs, grid, t0, denoised=False, qui
         sig, _, ptr, pte, loss, _ = er.run_fitted(o_tr, o_te, LP, S, grid)
         out = (np.degrees(sig.cpu().numpy()), identifiable(loss), er.psnr(o_tr, ptr), er.psnr(o_te, pte),
                sector_psnr(o_te, pte, sec_all[sel]))
-        print(f"  fitted（{tag}）: 学習 {out[2]:.2f} / テスト {out[3]:.2f} dB（{time.time() - t0:.0f} 秒）", flush=True)
+        print(f"  fitted ({tag}): train {out[2]:.2f} / test {out[3]:.2f} dB ({time.time() - t0:.0f} s)", flush=True)
         del o_tr, o_te
         torch.cuda.empty_cache()
         return out
 
     geom = keep & np.isin(sec_all, GEOM)
-    if quick:  # デノイズ後の確認: fitted だけ
-        f_deg, f_id, *_ = fitted_run(geom, "smooth と bump の区画")
+    if quick:  # check after denoising: fitted only
+        f_deg, f_id, *_ = fitted_run(geom, "smooth and bump sectors")
         pts["fitted_geom_deg"], pts["fitted_geom_ident"] = np.full(len(keep), np.nan), np.zeros(len(keep), bool)
         pts["fitted_geom_deg"][geom], pts["fitted_geom_ident"][geom] = f_deg, f_id
         return res, pts
 
-    # モデルの比較（smooth と bump の区画）
+    # Model comparison (smooth and bump sectors)
     d, idx = subset(geom)
     o_tr, o_te = er.Obs(*d["train"][:3], n_pt[idx], "radiance"), er.Obs(*d["test"][:3], n_pt[idx], "radiance")
     res["n_points_geom"], res["n_obs_geom"] = int(geom.sum()), {"train": len(o_tr.pid), "test": len(o_te.pid)}
@@ -320,8 +347,8 @@ def run_scale(scale, n0_all, sec_all, a_all, offs, grid, t0, denoised=False, qui
     def record(key, ptr, pte, o_tr, o_te):
         res["models"][key] = {"train": er.psnr(o_tr, ptr), "test": er.psnr(o_te, pte),
                               "test_by_sector": sector_psnr(o_te, pte, sec_all[geom])}
-        print(f"  {key:<13} 学習 {res['models'][key]['train']:6.2f}  テスト {res['models'][key]['test']:6.2f} dB"
-              f"（{time.time() - t0:.0f} 秒）", flush=True)
+        print(f"  {key:<13} train {res['models'][key]['train']:6.2f}  test {res['models'][key]['test']:6.2f} dB"
+              f" ({time.time() - t0:.0f} s)", flush=True)
 
     _, ptr, pte, _ = er.run_fixed(o_tr, o_te, None, SH_DEG, None)
     record("sh6", ptr, pte, o_tr, o_te)
@@ -342,7 +369,7 @@ def run_scale(scale, n0_all, sec_all, a_all, offs, grid, t0, denoised=False, qui
     _, ptr, pte, _ = er.run_fixed(o_tr, o_te, "obs", LP, S)
     record("measured_obs", ptr, pte, o_tr, o_te)
 
-    # 反射の異方性を補正した等方のぼけ
+    # Isotropic blur corrected for the anisotropy of the reflection
     def cos_obs(sp):
         vis, dirs, n_obs = d[sp][0], d[sp][2], d[sp][4]
         return (-(dirs * n_obs).sum(-1))[vis]
@@ -352,17 +379,17 @@ def run_scale(scale, n0_all, sec_all, a_all, offs, grid, t0, denoised=False, qui
     record("measured_obs_aniso", ptr, pte, o_tr, o_te)
     aniso_rms = per_point_rms(s_tr * f_tr, o_tr.pid, o_tr.n_pts)
 
-    # σ を一律に k 倍したとき
+    # When σ is multiplied uniformly by k
     res["scan_measured_obs"] = {}
     for k in K_SCAN:
         o_tr.sig_obs, o_te.sig_obs = k * s_tr, k * s_te
         _, ptr, pte, _ = er.run_fixed(o_tr, o_te, "obs", LP, S)
         res["scan_measured_obs"][str(k)] = {"train": er.psnr(o_tr, ptr), "test": er.psnr(o_te, pte)}
     best = max(res["scan_measured_obs"].items(), key=lambda kv: kv[1]["train"])
-    print(f"  measured_obs の倍率: 学習で最良の k = {best[0]}（学習 {best[1]['train']:.2f} / テスト "
-          f"{best[1]['test']:.2f} dB）（{time.time() - t0:.0f} 秒）", flush=True)
+    print(f"  scale factor for measured_obs: best k on training = {best[0]} (train {best[1]['train']:.2f} / test "
+          f"{best[1]['test']:.2f} dB) ({time.time() - t0:.0f} s)", flush=True)
 
-    # 足跡の中で反射方向の SH を平均する厳密なモデルと、等価な σ
+    # Exact model that averages the SH of the reflection directions within the footprint, and the equivalent σ
     Ys_tr = supersampled_Y(cams["train"], d["train"][0], d["train"][2], n0_all[idx], a_all[idx], offs)
     Ys_te = supersampled_Y(cams["test"], d["test"][0], d["test"][2], n0_all[idx], a_all[idx], offs)
     equiv = {l: per_point_rms(equivalent_sigma(Ys_tr, o_tr.Y, l), o_tr.pid, o_tr.n_pts) for l in EQUIV_L}
@@ -384,8 +411,8 @@ def run_scale(scale, n0_all, sec_all, a_all, offs, grid, t0, denoised=False, qui
     pts["fitted_geom_deg"], pts["fitted_geom_ident"] = np.full(len(keep), np.nan), np.zeros(len(keep), bool)
     pts["fitted_geom_deg"][geom], pts["fitted_geom_ident"][geom] = f_deg, f_id
 
-    # 全区画の点で fitted を解き直す（brdf の区画の最適なぼけ）
-    a_deg, a_id, tr, te, by_sec = fitted_run(keep, "全区画")
+    # Solve fitted again on the points of all sectors (optimal blur of the brdf sectors)
+    a_deg, a_id, tr, te, by_sec = fitted_run(keep, "all sectors")
     res["fitted_all"] = {"train": tr, "test": te, "test_by_sector": by_sec}
     pts["fitted_all_deg"], pts["fitted_all_ident"] = np.full(len(keep), np.nan), np.zeros(len(keep), bool)
     pts["fitted_all_deg"][keep], pts["fitted_all_ident"][keep] = a_deg, a_id
@@ -393,7 +420,8 @@ def run_scale(scale, n0_all, sec_all, a_all, offs, grid, t0, denoised=False, qui
 
 
 def summarize(res, pts, sec_all):
-    """区画ごとの中央値と平均（mean。σ は格子の値しか取らず中央値が飛ぶので、図と表は平均を使う）と、順位相関"""
+    """Median and mean per sector (mean: σ takes only grid values and the median jumps, so the figures and tables
+    use the mean), and rank correlations"""
     keep = pts["keep"]
     rows = {}
     for k, (name, sig, mat) in enumerate(ms.SECTORS):
@@ -425,7 +453,8 @@ def summarize(res, pts, sec_all):
             "geom_measured_pt_vs_fitted": float(spearmanr(pts["measured_pt_deg"][m], pts["fitted_geom_deg"][m])[0]),
             "geom_measured_obs_rms_vs_fitted": float(spearmanr(pts["measured_obs_rms_deg"][m],
                                                                pts["fitted_geom_deg"][m])[0])}
-        for k in GEOM:  # 区画の中だけでの順位相関（区画の違いを除いた、点ごとのばらつきの効き）
+        for k in GEOM:  # rank correlation within a sector only (the effect of per-point variation,
+                        # with the differences between sectors removed)
             mk = m & (sec_all == k)
             if mk.sum() > 30 and ms.SECTORS[k][1] > 0:
                 res["spearman"][f"within_{ms.SECTORS[k][0]}"] = float(
@@ -433,13 +462,13 @@ def summarize(res, pts, sec_all):
         res["spearman"]["n_bump_identifiable"] = int(bump.sum())
 
 
-# ---- 図 ----
+# ---- Figures ----
 
-SECTOR_LABEL = {"smooth_a": "なめらか A", "bump3": "凹凸 3°", "bump6": "凹凸 6°", "bump12": "凹凸 12°",
-                "smooth_b": "なめらか B", "brdf3": "GGX 3°", "brdf6": "GGX 6°", "brdf12": "GGX 12°"}
-C_CAT = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]  # 図のカテゴリ色（この順で割り当てる）
-SCALE_STYLE = {"512": ("o", "#a3a29e"), "256": ("^", "#6f6e6a"), "128": ("s", "#0b0b0b")}  # 画素の大きさ（形と濃さ）
-VIEW_IDS = ["view_1_003", "view_1_009", "view_1_015", "view_1_021"]  # 赤道の視点（経度 49, 139, 229, 319°）
+SECTOR_LABEL = {"smooth_a": "Smooth A", "bump3": "Bumps 3°", "bump6": "Bumps 6°", "bump12": "Bumps 12°",
+                "smooth_b": "Smooth B", "brdf3": "GGX 3°", "brdf6": "GGX 6°", "brdf12": "GGX 12°"}
+C_CAT = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]  # category colours for the figures (assigned in this order)
+SCALE_STYLE = {"512": ("o", "#a3a29e"), "256": ("^", "#6f6e6a"), "128": ("s", "#0b0b0b")}  # pixel size (marker shape and darkness)
+VIEW_IDS = ["view_1_003", "view_1_009", "view_1_015", "view_1_021"]  # equatorial views (longitude 49, 139, 229, 319°)
 
 
 def _axes_style(ax):
@@ -450,24 +479,24 @@ def _axes_style(ax):
 
 
 def plot_results(out, path):
-    """(a)〜(c) 凹凸の区画ごとの、ぼけの幅と画素の大きさ、(d) テスト視点の PSNR、(e) GGX の区画の最適なぼけ"""
+    """(a)–(c) Blur width and pixel size for each bump sector, (d) test-view PSNR, (e) optimal blur of the GGX sectors"""
     plt = er.setup_plt()
     sc = [k for k in ("512", "256", "128") if k in out["scales"]]
     R = {k: out["scales"][k] for k in sc}
     width = np.array([R[k]["pixel_width_mm_median"] for k in sc])
     fig = plt.figure(figsize=(11.6, 8.4), dpi=200, facecolor=so.C_SURF)
     gs_ = fig.add_gridspec(2, 6, height_ratios=[1.0, 1.08], hspace=0.42, wspace=1.1)
-    series = [("fitted", "点ごとに最適化（帯は 25〜75%）", C_CAT[0], "o", 2.2),
-              ("measured_pt_deg", "換算: 点の足跡（像の解析と同じ）", C_CAT[1], "s", 1.4),
-              ("measured_obs_rms_deg", "換算: 観測ごとの足跡（斜めから見ると伸びる）", C_CAT[2], "^", 1.4),
-              ("measured_obs_aniso_rms_deg", "換算: 観測ごと × 反射の異方性の補正", C_CAT[3], "D", 1.4)]
+    series = [("fitted", "Optimized per point (the band is 25–75%)", C_CAT[0], "o", 2.2),
+              ("measured_pt_deg", "Conversion: per-point footprint (same as the analysis of the statue)", C_CAT[1], "s", 1.4),
+              ("measured_obs_rms_deg", "Conversion: per-observation footprint (stretches at oblique viewing)", C_CAT[2], "^", 1.4),
+              ("measured_obs_aniso_rms_deg", "Conversion: per-observation × anisotropy correction of the reflection", C_CAT[3], "D", 1.4)]
     for j, name in enumerate(["bump3", "bump6", "bump12"]):
         ax = fig.add_subplot(gs_[0, 2 * j:2 * j + 2])
         _axes_style(ax)
         rows = [R[k]["sectors"][name] for k in sc]
         design = rows[0]["design_blur_deg"]
         ax.axhline(design, color=so.C_TEXT2, lw=1.0, ls=(0, (4, 3)),
-                   label="換算: 十分大きい足跡（2 × 設計の傾き）" if j == 0 else None)
+                   label="Conversion: sufficiently large footprint (2 × design tilt)" if j == 0 else None)
         for key, lab, col, mk, lw in series:
             if key == "fitted":
                 f = [r.get("fitted_geom") for r in rows]
@@ -482,19 +511,19 @@ def plot_results(out, path):
         ax.minorticks_off()
         ax.set_xlim(width.min() / 1.25, width.max() * 1.25)
         ax.set_ylim(0, design * 1.12)
-        ax.set_xlabel("1 画素の幅 [mm]（点の所、中央値）", fontsize=8)
+        ax.set_xlabel("Width of one pixel [mm] (at the point, median)", fontsize=8)
         if j == 0:
-            ax.set_ylabel("反射方向でのぼけの幅 σ [度]（区画の平均）")
-        ax.set_title(f"({'abc'[j]}) {SECTOR_LABEL[name]}（1 軸あたりの傾きの標準偏差）", fontsize=9, loc="left")
+            ax.set_ylabel("Blur width σ in reflection direction [degrees] (sector mean)")
+        ax.set_title(f"({'abc'[j]}) {SECTOR_LABEL[name]} (standard deviation of the tilt per axis)", fontsize=9, loc="left")
     fig.legend(loc="upper left", bbox_to_anchor=(0.01, 0.955), ncol=3, fontsize=7.5, frameon=False)
 
-    # (d) テスト視点の PSNR
+    # (d) Test-view PSNR
     ax = fig.add_subplot(gs_[1, :4])
     _axes_style(ax)
-    models = [("material", "ぼけなし（σ = 0）"), ("measured_pt", "換算: 点の足跡"),
-              ("measured_obs", "換算: 観測ごとの足跡"), ("measured_obs_aniso", "換算: 観測ごと × 異方性の補正"),
-              ("scan", "換算: 観測ごと × 最良の倍率 k"), ("fitted", "点ごとに最適化"),
-              ("supersampled", "足跡の中で反射を平均（ぼけの近似なし）")]
+    models = [("material", "No blur (σ = 0)"), ("measured_pt", "Conversion: per-point footprint"),
+              ("measured_obs", "Conversion: per-observation footprint"), ("measured_obs_aniso", "Conversion: per-observation × anisotropy correction"),
+              ("scan", "Conversion: per-observation × best scale factor k"), ("fitted", "Optimized per point"),
+              ("supersampled", "Average the reflection within the footprint (no blur approximation)")]
     ys = np.arange(len(models))
     for k in sc:
         mk, col = SCALE_STYLE[k]
@@ -507,21 +536,21 @@ def plot_results(out, path):
             else:
                 xs.append(R[k]["models"][key]["test"])
         ax.scatter(xs, ys, marker=mk, s=34, color=col, edgecolor=so.C_SURF, lw=0.8, zorder=3,
-                   label=f"{k} px（最良の k = {ks}）")
+                   label=f"{k} px (best k = {ks})")
     ax.set_yticks(ys)
     ax.set_yticklabels([m[1] for m in models], fontsize=7.5)
     ax.invert_yaxis()
-    ax.set_xlabel("テスト視点の観測色の PSNR [dB]（なめらかと凹凸の 5 区画の点）", fontsize=8)
-    ax.legend(loc="lower left", fontsize=7.5, frameon=False, title="画素の大きさ", title_fontsize=7.5)
-    ax.set_title("(d) 照明を共有するモデルの再現度（どれも共有の照明 SH 48 次 + 点ごとの定数）", fontsize=9, loc="left")
+    ax.set_xlabel("Test-view PSNR of the observed colour [dB] (points of the 5 smooth and bump sectors)", fontsize=8)
+    ax.legend(loc="lower left", fontsize=7.5, frameon=False, title="Pixel size", title_fontsize=7.5)
+    ax.set_title("(d) Reconstruction quality of the models that share the lighting (all of them: shared lighting of SH degree 48 + per-point constant)", fontsize=9, loc="left")
 
-    # (e) GGX の区画
+    # (e) GGX sectors
     ax = fig.add_subplot(gs_[1, 4:])
     _axes_style(ax)
     top = 34
     ax.plot([0, top], [0, top], color=so.C_TEXT2, lw=1.0, ls=(0, (4, 3)), label="y = x")
-    groups = [(["brdf3", "brdf6", "brdf12"], "fitted_all", C_CAT[4], "GGX の区画（形はなめらか）"),
-              (["bump3", "bump6", "bump12"], "fitted_geom", C_CAT[0], "凹凸の区画")]
+    groups = [(["brdf3", "brdf6", "brdf12"], "fitted_all", C_CAT[4], "GGX sectors (smooth shape)"),
+              (["bump3", "bump6", "bump12"], "fitted_geom", C_CAT[0], "Bump sectors")]
     for names, key, col, lab in groups:
         for i, k in enumerate(sc):
             mk, _ = SCALE_STYLE[k]
@@ -534,20 +563,21 @@ def plot_results(out, path):
     ax.set_xlim(0, top)
     ax.set_ylim(0, top)
     ax.set_xticks([0, 6, 12, 24])
-    ax.set_xlabel("設計のぼけ [度]（GGX は半値幅を合わせたガウス）", fontsize=8)
-    ax.set_ylabel("点ごとに最適なぼけ σ [度]（平均、線は 25〜75%）", fontsize=8)
+    ax.set_xlabel("Design blur [degrees] (for GGX, a Gaussian with matched half width)", fontsize=8)
+    ax.set_ylabel("Optimal per-point blur σ [degrees] (mean, the lines are 25–75%)", fontsize=8)
     ax.legend(loc="upper left", fontsize=7.2, frameon=False)
-    ax.text(0.98, 0.03, "形は画素の大きさ（○ 512 / △ 256 / □ 128 px）", transform=ax.transAxes, ha="right",
+    ax.text(0.98, 0.03, "Marker shape is the pixel size (○ 512 / △ 256 / □ 128 px)", transform=ax.transAxes, ha="right",
             fontsize=7, color=so.C_TEXT2)
-    ax.set_title("(e) 材質の粗さに当たるぼけ", fontsize=9, loc="left")
-    fig.suptitle("凹凸の球: 点ごとに最適化したぼけと、画素の中の法線のばらつきからの換算", fontsize=10.5, x=0.01,
+    ax.set_title("(e) Blur corresponding to the material roughness", fontsize=9, loc="left")
+    fig.suptitle("Bumpy sphere: blur optimized per point, and the conversion from the normal variation within a pixel", fontsize=10.5, x=0.01,
                  y=0.995, ha="left")
     fig.savefig(path, facecolor=so.C_SURF, bbox_inches="tight", pad_inches=0.12)
     plt.close(fig)
 
 
 def _meridian(cam, frm, lon, lats_deg):
-    """経度 lon の子午線上の点を投影 -> u, v, カメラに向いているか（向きの余弦 > 0.3）"""
+    """Project points on the meridian of longitude lon -> u, v, whether they face the camera (cosine of the
+    facing angle > 0.3)"""
     lat = np.radians(np.asarray(lats_deg, dtype=float))
     q = np.stack([np.cos(lat) * np.sin(np.radians(lon)), np.sin(lat), np.cos(lat) * np.cos(np.radians(lon))], -1)
     X = torch.tensor(ms.R0 * q, dtype=torch.float32, device=DEV)
@@ -558,11 +588,12 @@ def _meridian(cam, frm, lon, lats_deg):
 
 
 def plot_views(path):
-    """赤道の 4 視点（512 px の中央、区画の名前と境目つき）と、1 視点の中央を 3 つの画素の大きさで"""
+    """The 4 equatorial views (centre of the 512 px images, with sector names and boundaries), and the centre of
+    one view at the 3 pixel sizes"""
     plt = er.setup_plt()
     frm = {n: f for s, n, f in ms.views() if s == "train"}
-    lo, hi = 96, 416                       # 上段の切り出し（球が収まる範囲）
-    name2, c, h = VIEW_IDS[1], 256, 96     # 下段: この視点の中央 2h 画素四方
+    lo, hi = 96, 416                       # crop for the top row (the range that contains the sphere)
+    name2, c, h = VIEW_IDS[1], 256, 96     # bottom row: the central square of 2h pixels of this view
     fig = plt.figure(figsize=(11.6, 7.7), dpi=200, facecolor=so.C_SURF)
     gs_ = fig.add_gridspec(2, 12, height_ratios=[2.9, 3.87], hspace=0.1, wspace=0.12, left=0.01, right=0.99,
                            top=0.95, bottom=0.01)
@@ -578,7 +609,7 @@ def plot_views(path):
             ax.plot(np.where(cv > 0.3, u, np.nan), np.where(cv > 0.3, v, np.nan), color="#fcfcfb", lw=0.8,
                     ls=(0, (3, 3)), alpha=0.85)
             u, v, cv = _meridian(cam, frm[name], ms.SECTOR_DEG * (k + 0.5), [0.0])
-            if cv[0] > 0.6:  # 区画の中央が正面に近いものだけ名前を出す（1 視点に 2 つ）
+            if cv[0] > 0.6:  # show the name only for sectors whose centre is close to head-on (2 per view)
                 ax.text(u[0], lo + 6, SECTOR_LABEL[sname], ha="center", va="top", fontsize=8, color=so.C_TEXT,
                         bbox=dict(boxstyle="round,pad=0.25", fc="#fcfcfb", ec="none", alpha=0.9))
         ax.set_xlim(lo, hi)
@@ -590,21 +621,21 @@ def plot_views(path):
         a0, a1 = (c - h) // f, (c + h) // f
         ax = fig.add_subplot(gs_[1, 4 * j:4 * j + 4])
         ax.imshow(er.radiance_to_display(x[a0:a1, a0:a1]).numpy().clip(0, 1), interpolation="nearest",
-                  extent=(c - h, c + h, c + h, c - h))  # 512 px の画素座標で描く（境目の線と合わせるため）
+                  extent=(c - h, c + h, c + h, c - h))  # draw in 512 px pixel coordinates (to line up with the boundary lines)
         cam = Cam(frm[name2], ms.SIZE)
         u, v, cv = _meridian(cam, frm[name2], 135.0, np.linspace(-62, 62, 200))
         ax.plot(u, v, color="#fcfcfb", lw=1.0, ls=(0, (3, 3)), alpha=0.9)
         ax.set_xlim(c - h, c + h)
         ax.set_ylim(c + h, c - h)
         ax.set_axis_off()
-        ax.set_title(f"{k} px（1 画素 ≈ {1.36 * f:.2f} mm）", fontsize=8, loc="left")
+        ax.set_title(f"{k} px (1 pixel ≈ {1.36 * f:.2f} mm)", fontsize=8, loc="left")
         if j == 0:
-            for dx, lab in ((-50, "凹凸 6°"), (50, "凹凸 12°")):
+            for dx, lab in ((-50, "Bumps 6°"), (50, "Bumps 12°")):
                 ax.text(c + dx, c + h - 6, lab, ha="center", va="bottom", fontsize=8, color=so.C_TEXT,
                         bbox=dict(boxstyle="round,pad=0.25", fc="#fcfcfb", ec="none", alpha=0.9))
     lon2 = ms.lon_lat(np.array(frm[name2]))[0]
-    fig.suptitle(f"凹凸の球（半径 {ms.R0 * 100:.0f} cm、凹凸の波長 {ms.LAMBDA * 1000:.0f} mm、点線は区画の境目）: "
-                 f"上は赤道の 4 視点、下は経度 {lon2:.0f}° の視点の中央を画素の大きさを変えて",
+    fig.suptitle(f"Bumpy sphere (radius {ms.R0 * 100:.0f} cm, bump wavelength {ms.LAMBDA * 1000:.0f} mm, dotted lines are sector boundaries): "
+                 f"top: the 4 equatorial views; bottom: the centre of the view at longitude {lon2:.0f}°, at different pixel sizes",
                  fontsize=9.5, x=0.01, y=0.995, ha="left")
     fig.savefig(path, facecolor=so.C_SURF, bbox_inches="tight", pad_inches=0.1)
     plt.close(fig)
@@ -614,10 +645,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--scales", type=int, nargs="+", default=ms.SCALES)
     ap.add_argument("--no-denoised-check", action="store_true")
-    ap.add_argument("--plot-only", action="store_true", help="sphere_rough.json から図だけ描き直す")
+    ap.add_argument("--plot-only", action="store_true", help="only redraw the figures from sphere_rough.json")
     a = ap.parse_args()
     fig_dir = HERE / "figures"
-    if a.plot_only:  # 点ごとの値（npz）から区画の集計を取り直して、図を描く
+    if a.plot_only:  # recompute the sector summaries from the per-point values (npz), and draw the figures
         out = json.loads((HERE / "sphere_rough.json").read_text(encoding="utf-8"))
         z = np.load(OUT_NPZ)
         sec_all = z["sector"]
@@ -654,27 +685,27 @@ def main():
             fg = r.get("fitted_geom", {}).get("median_deg", float("nan"))
             fa = r.get("fitted_all", {}).get("median_deg", float("nan"))
             ex = "".join(f"  {lab} {r[k]:5.1f}°" for lab, k in
-                         [("異方性補正", "measured_obs_aniso_rms_deg"), ("等価 l4", "equiv_l4_deg"),
-                          ("等価 l12", "equiv_l12_deg")] if k in r)
-            print(f"    {name:<9} 設計 {r['design_blur_deg']:4.0f}°  測った（点）{r['measured_pt_deg']:5.1f}°  "
-                  f"測った（観測）{r['measured_obs_rms_deg']:5.1f}°{ex}  最適化 {fg:5.1f}° / 全区画で {fa:5.1f}°")
-        print(f"    順位相関: {res.get('spearman')}", flush=True)
+                         [("aniso. corr.", "measured_obs_aniso_rms_deg"), ("equiv. l4", "equiv_l4_deg"),
+                          ("equiv. l12", "equiv_l12_deg")] if k in r)
+            print(f"    {name:<9} design {r['design_blur_deg']:4.0f}°  measured (point) {r['measured_pt_deg']:5.1f}°  "
+                  f"measured (obs.) {r['measured_obs_rms_deg']:5.1f}°{ex}  optimized {fg:5.1f}° / on all sectors {fa:5.1f}°")
+        print(f"    rank correlations: {res.get('spearman')}", flush=True)
         (HERE / "sphere_rough.json").write_text(json.dumps(out, indent=1, ensure_ascii=False), encoding="utf-8")
         np.savez_compressed(OUT_NPZ, **arrays)
-    if not a.no_denoised_check and 256 in a.scales:  # 像と同じくデノイズ後の画像を使うと、最適なぼけは変わるか
+    if not a.no_denoised_check and 256 in a.scales:  # as for the statue: does using the denoised images change the optimal blur?
         res, pts = run_scale(256, n0, sec_all, a_t, offs, grid, t0, denoised=True, quick=True)
         summarize(res, pts, sec_all)
         out["denoised_256"] = {k: {"fitted_geom": v.get("fitted_geom")} for k, v in res["sectors"].items()
                                if ms.SECTORS[[s[0] for s in ms.SECTORS].index(k)][2] == "au"}
         arrays.update({f"dn256_{k}": v for k, v in pts.items()})
         for name, r in out["denoised_256"].items():
-            print(f"    デノイズ後 {name:<9} 最適化 {r['fitted_geom']['median_deg'] if r['fitted_geom'] else float('nan'):5.1f}°")
+            print(f"    denoised {name:<9} optimized {r['fitted_geom']['median_deg'] if r['fitted_geom'] else float('nan'):5.1f}°")
     (HERE / "sphere_rough.json").write_text(json.dumps(out, indent=1, ensure_ascii=False), encoding="utf-8")
     np.savez_compressed(OUT_NPZ, **arrays)
     if len(out["scales"]) == len(ms.SCALES):
         plot_results(out, fig_dir / "sphere_rough.png")
         plot_views(fig_dir / "sphere_views.png")
-    print(f"-> {HERE / 'sphere_rough.json'}, {OUT_NPZ}、figures/sphere_*.png（{time.time() - t0:.0f} 秒）")
+    print(f"-> {HERE / 'sphere_rough.json'}, {OUT_NPZ}, figures/sphere_*.png ({time.time() - t0:.0f} s)")
 
 
 if __name__ == "__main__":

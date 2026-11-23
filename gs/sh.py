@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""球面調和関数 (SH) による視点依存の色。
+"""View-dependent color with spherical harmonics (SH).
 
-各ガウシアンは RGB ごとに (deg+1)^2 個の SH 係数を持ち、
-視線方向 d（カメラ中心 → ガウシアン中心の単位ベクトル）に対して
+Each Gaussian has (deg+1)^2 SH coefficients per RGB channel, and for the view direction d
+(the unit vector from the camera center to the Gaussian center) the color is
     color(d) = Σ_lm k_lm Y_lm(d) + 0.5
-とする。deg=0 なら方向によらない一定色（拡散色）になる。
-定数と式は公式実装 (utils/sh_utils.py) と同じ実数 SH。
+With deg=0 this is a constant color regardless of direction (diffuse color).
+Constants and formulas are the same real SH as the official implementation (utils/sh_utils.py).
 """
 
 C0 = 0.28209479177387814
@@ -17,7 +17,7 @@ C3 = (-0.5900435899266435, 2.890611442640554, -0.4570457994644658, 0.37317633259
 
 
 def eval_sh(deg, sh, dirs):
-    """sh: (N, K, 3) [K >= (deg+1)^2],  dirs: (N, 3) 単位ベクトル  ->  (N, 3)"""
+    """sh: (N, K, 3) [K >= (deg+1)^2],  dirs: (N, 3) unit vectors  ->  (N, 3)"""
     out = C0 * sh[:, 0]
     if deg < 1:
         return out
@@ -47,18 +47,20 @@ def eval_sh(deg, sh, dirs):
 
 
 def rgb_to_sh0(rgb):
-    """一定色 rgb になる 0 次係数"""
+    """Degree-0 coefficients that give the constant color rgb"""
     return (rgb - 0.5) / C0
 
 
 def sh_basis(deg, dirs):
-    """任意の次数までの実 SH 基底 (N, (deg+1)^2)。並びと符号は eval_sh と同じ（3 次まで一致する）。
+    """Real SH basis up to an arbitrary degree (N, (deg+1)^2).
+    Order and signs are the same as eval_sh (they agree up to degree 3).
 
     Y_l^m = √2 K_l^m cos(mφ) P_l^m(cosθ)    (m > 0)
           = K_l^0 P_l^0(cosθ)              (m = 0)
           = √2 K_l^|m| sin(|m|φ) P_l^|m|(cosθ)  (m < 0)
-    K_l^m = √((2l+1)/(4π) · (l-m)!/(l+m)!)。P_l^m は Condon-Shortley 位相付きの Legendre 陪関数で、漸化式で求める。
-    添字は l² + l + m。精度のため内部は float64。
+    K_l^m = √((2l+1)/(4π) · (l-m)!/(l+m)!). P_l^m is the associated Legendre function with the
+    Condon-Shortley phase, computed by recurrence.
+    The index is l² + l + m. float64 internally for precision.
     """
     import math
 
@@ -74,7 +76,7 @@ def sh_basis(deg, dirs):
         if m > 0:
             pmm = -(2 * m - 1) * s * pmm
             cm, sm = math.sqrt(2) * torch.cos(m * phi), math.sqrt(2) * torch.sin(m * phi)
-        p_prev, p = None, pmm  # P_{l-1}^m, P_l^m（l = m から始める）
+        p_prev, p = None, pmm  # P_{l-1}^m, P_l^m (start from l = m)
         for l in range(m, deg + 1):
             if l == m + 1:
                 p_prev, p = p, z * (2 * m + 1) * pmm

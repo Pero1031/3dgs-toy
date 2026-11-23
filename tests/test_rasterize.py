@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-タイル化ラスタライザ (rasterize) を、全ガウシアン×全画素の素朴な実装と突き合わせる検算。
-画像と、全パラメータへの勾配が一致することを確かめる。
+Check that compares the tiled rasterizer (rasterize) against a naive implementation over all Gaussians × all pixels.
+Verifies that the image and the gradients with respect to all parameters agree.
 
     python tests/test_rasterize.py
 """
@@ -20,7 +20,7 @@ from gs.rasterize import (SegmentedExclusiveCumsum, conic_and_radius, covariance
 
 
 def run_segment_gradcheck():
-    """手書きの逆伝播を数値微分と比べる（torch.autograd.gradcheck）"""
+    """Compare the hand-written backward pass with numerical differentiation (torch.autograd.gradcheck)"""
     counts = torch.tensor([3, 0, 1, 4, 2], device="cuda")
     starts = torch.cumsum(counts, 0) - counts
     tl = torch.repeat_interleave(torch.arange(len(counts), device="cuda"), counts)
@@ -44,7 +44,7 @@ def run(max_entries, tile, N=400, W=75, H=53, seed=0):
     leaf = {k: v.to(dev).requires_grad_(True) for k, v in leaf.items()}
     cam = Camera.from_blender(look_at_origin(30, 25, 4.0), W, H, focal=70.0, device=dev)
     bg = torch.tensor([0.2, 0.5, 0.9], device=dev)
-    weight = torch.rand(H, W, 3, generator=g).to(dev)  # 適当な重みで損失を作り勾配を比べる
+    weight = torch.rand(H, W, 3, generator=g).to(dev)  # build a loss with arbitrary weights and compare the gradients
 
     def forward(fn, **kw):
         cov = covariance_3d(leaf["log_scales"].exp(), F.normalize(leaf["quats"], dim=-1))
@@ -68,13 +68,14 @@ def run(max_entries, tile, N=400, W=75, H=53, seed=0):
 
 
 def run_radius_equivalence(N=400, W=75, H=53, seed=1):
-    """不透明度で打ち切った半径でタイルを割り当てても、3σ で割り当てた場合と同じ画像・勾配になるか"""
+    """Whether assigning tiles with the radius cut off by opacity gives the same image and gradients
+    as assigning with 3σ"""
     g = torch.Generator().manual_seed(seed)
     dev = "cuda"
     means = ((torch.rand(N, 3, generator=g) * 2 - 1) * 1.2).to(dev)
     scales = (torch.rand(N, 3, generator=g) * 0.3 + 0.01).to(dev)
     quats = F.normalize(torch.randn(N, 4, generator=g), dim=-1).to(dev)
-    logits = (torch.randn(N, generator=g) * 3 - 2).to(dev).requires_grad_(True)  # 低い不透明度を多めに
+    logits = (torch.randn(N, generator=g) * 3 - 2).to(dev).requires_grad_(True)  # more low opacities than usual
     color = torch.rand(N, 3, generator=g).to(dev)
     cam = Camera.from_blender(look_at_origin(30, 25, 4.0), W, H, focal=70.0, device=dev)
     bg = torch.ones(3, device=dev)
@@ -85,7 +86,7 @@ def run_radius_equivalence(N=400, W=75, H=53, seed=1):
     imgo = rasterize(m2, conic, opacity, color, r_op, depth, W, H, bg)[0]
     g3, = torch.autograd.grad(img3.sum(), logits, retain_graph=True)
     go, = torch.autograd.grad(imgo.sum(), logits)
-    print(f"radius equivalence: 3σ 半径の平均 {r3.mean():.1f}px -> 不透明度で打ち切り {r_op.mean():.1f}px, "
+    print(f"radius equivalence: mean 3σ radius {r3.mean():.1f}px -> cut off by opacity {r_op.mean():.1f}px, "
           f"image max|diff| = {(img3 - imgo).abs().max():.2e}, grad max|diff| = {(g3 - go).abs().max():.2e}")
     return torch.allclose(img3, imgo, atol=1e-6) and torch.allclose(g3, go, atol=1e-6)
 
@@ -93,8 +94,8 @@ def run_radius_equivalence(N=400, W=75, H=53, seed=1):
 if __name__ == "__main__":
     ok = run_segment_gradcheck()
     ok &= run_radius_equivalence()
-    ok &= run(max_entries=2 ** 24, tile=16)  # チャンク 1 つ
-    ok &= run(max_entries=3000, tile=16)     # 複数チャンク + gradient checkpointing
+    ok &= run(max_entries=2 ** 24, tile=16)  # 1 chunk
+    ok &= run(max_entries=3000, tile=16)     # multiple chunks + gradient checkpointing
     ok &= run(max_entries=2 ** 24, tile=8)
     print("OK" if ok else "NG")
     sys.exit(0 if ok else 1)

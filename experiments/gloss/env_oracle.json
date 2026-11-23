@@ -237,19 +237,19 @@
   }
  },
  "summary_test_psnr": {
-  "点ごとの SH（前回の最良）": {
+  "Per-point SH (best of the previous fit)": {
    "gold": 26.784980492503667,
    "matte": 41.42829077173265
   },
-  "共有の照明だけ": {
+  "Shared lighting only": {
    "gold": 19.667758476670247,
    "matte": 24.170257004471836
   },
-  "点ごとの定数 + 共有の照明": {
+  "Per-point constant + shared lighting": {
    "gold": 22.042772353804114,
    "matte": 38.9300038622728
   },
-  "点ごとの SH 2 次 + 共有の照明": {
+  "Per-point degree-2 SH + shared lighting": {
    "gold": 24.511359660777817,
    "matte": 41.40806235273939
   }

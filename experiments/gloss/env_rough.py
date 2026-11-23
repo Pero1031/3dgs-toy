@@ -1,32 +1,41 @@
 # -*- coding: utf-8 -*-
 """
-画素の中の法線のばらつきから決めた「実効的な粗さ」は、点ごとに最適化した粗さと合うか（3DGS を使わない検証）。
+Does the "effective roughness" determined from the normal variation within a pixel agree with the roughness optimized
+per point? (a check that does not use 3DGS)
 
-env_oracle.py の共有の照明に、点ごとのぼかしを足す:
+Add a per-point blur to the shared lighting of env_oracle.py:
     y(p, v) ≈ Σ_k c_{p,k} Y_k(d)  +  Σ_j a_{l(j)}(σ_p) e_j Y_j(r)
     a_l(σ) = exp(−l(l+1) σ² / 2)
-球面上を幅 σ（1 軸あたりの標準偏差、ラジアン）のガウスでぼかすことは、SH では次数 l の係数に a_l を掛けることに当たる
-（球面上の熱拡散。Ref-NeRF の IDE の減衰と同じ形）。σ_p を決めれば予測は e について線形のままなので、
-env_oracle.py と同じく点ごとの項を消去して e を解ける。
+Blurring on the sphere with a Gaussian of width σ (standard deviation per axis, radians) corresponds, in SH, to
+multiplying the coefficients of degree l by a_l (heat diffusion on the sphere. The same form as the attenuation in the
+IDE of Ref-NeRF). Once σ_p is fixed, the prediction remains linear in e, so e can be solved by eliminating the
+per-point term, as in env_oracle.py.
 
-σ_p の決め方を 3 通り比べる:
-    material  σ_p = 0。材質の粗さ（GGX α = 0.01、反射方向で約 1°）は照明の SH の分解能（約 4°）より細かいので 0 とみなす。
-              全点に共通のぼけは照明 e 自体がぼけることで吸収できるので、「全点で同じ粗さ」のモデルでもある
-    measured  真のメッシュで、点のまわり半径 R にある表面の法線（レンダラーと同じ、頂点法線を補間したもの）の
-              平均ベクトル n̄ を測り、σ_p = 2√(1 − |n̄|) とする。法線が 1 軸あたり標準偏差 σ_n でばらつくと
-              |n̄| ≈ 1 − σ_n²（Toksvig の手がかり）、反射方向は法線の 2 倍ずれる。自由なパラメータはない
-    fitted    点ごとに σ_p を格子から選ぶ（学習視点の誤差が最小のもの）。照明 e と交互に解く。既存手法が学習する粗さの代わり
+Three ways of setting σ_p are compared:
+    material  σ_p = 0. The material roughness (GGX α = 0.01, about 1° in reflection direction) is finer than the
+              resolution of the lighting SH (about 4°), so it is treated as 0. A blur common to all points can be
+              absorbed by the lighting e itself becoming blurred, so this is also the "same roughness at all points"
+              model
+    measured  On the true mesh, measure the mean vector n̄ of the surface normals (the same as the renderer:
+              interpolated from vertex normals) within radius R around the point, and set σ_p = 2√(1 − |n̄|). When
+              normals vary with a standard deviation of σ_n per axis, |n̄| ≈ 1 − σ_n² (Toksvig's cue), and the
+              reflection direction shifts by twice the shift of the normal. No free parameters
+    fitted    Choose σ_p per point from a grid (the one with the smallest error on the training views). Solved
+              alternately with the lighting e. A stand-in for the roughness that existing methods learn
 
-値の空間: レンダラーの PNG は「放射輝度 x → Reinhard x/(1+x) → sRGB の曲線」。画素の中での平均（ぼけ）は放射輝度で
-起きるので、モデルは放射輝度で組み、誤差は表示値で測る（評価は前回までと同じ表示値の PSNR）。表示値への変換は非線形
-なので、予測のまわりで一次近似して重み付き最小二乗を解き、近似を取り直すことを繰り返す（ガウス・ニュートン法）。
-重みを観測値の所で固定すると、明るい映り込みの重みが背景の数千分の一になり、外しても無視されてしまう。
+Value space: the renderer's PNG is "radiance x → Reinhard x/(1+x) → sRGB curve". Averaging within a pixel (the blur)
+happens in radiance, so the model is built in radiance and the error is measured in display values (the evaluation is
+PSNR of display values, as before). The conversion to display values is nonlinear, so it is linearized around the
+prediction, a weighted least squares is solved, and the linearization is redone, repeatedly (Gauss-Newton).
+If the weights are fixed at the observed values, the weight of bright reflections becomes a few thousandths of that of
+the background, and missing them is ignored.
 
-相互反射は扱わないので、env_diagnose.py の判定で像自身に遮られる観測は除く。
+Interreflection is not handled, so observations judged by env_diagnose.py to be occluded by the statue itself are
+removed.
 
     python experiments/gloss/env_rough.py
 
-出力: experiments/gloss/env_rough.json, figures/env_rough.png
+Output: experiments/gloss/env_rough.json, figures/env_rough.png
 """
 
 import json
@@ -49,25 +58,29 @@ from gs.sh import sh_basis  # noqa: E402
 
 DEV = so.DEV
 F64 = torch.float64
-LE = 48                                  # 共有の照明の SH の次数（分解能はおよそ 180°/48 ≈ 4°）
-ENV_SMOOTH = [0.03, 0.1, 0.3]            # 共有の照明のなめらかさの罰（最初の実行で 0.1 が最良、10 は常に悪かった）
-LOCAL_DEGREES = [0, 2]                   # 点ごとの項の次数（0 = 点ごとの定数）
-SIGMA_GRID_DEG = [0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 18, 22, 27, 33, 40]  # 反射方向でのぼけの幅の候補
-RADII_MM = [0.68, 1.36, 2.72, 4.0]       # 法線のばらつきを測る半径
-R_NOMINAL_MM = 2.72                      # 1 画素の幅（距離 1.3 m）。画素の箱型と、観測を拾う双線形補間（±1 画素の三角形）を
-                                         # 合わせた広がりは 1 軸あたり標準偏差 1.36 mm で、半径 2.72 mm の一様な円板と同じ
-SH_REF_DEGREES = [2, 3, 4, 6]            # 参考: 点ごとの SH（sh_oracle.py）
-N_ITER = 10                              # fitted の交互の更新の回数
-GN_ITERS = 6                             # ガウス・ニュートン法の反復の回数（σ を固定したモデル）
-GN_FINAL = 3                             # fitted で σ を決めたあとの、ガウス・ニュートン法の反復の回数
-X_MAX = 50.0                             # 一次近似する位置の上限（放射輝度。表示値で約 0.99）
-ID_CONTRAST = 0.02                       # σ を変えると学習視点の誤差（表示値の RMSE）がこれ以上変わる点を「粗さが決まる点」とする
+LE = 48                                  # SH degree of the shared lighting (resolution is about 180°/48 ≈ 4°)
+ENV_SMOOTH = [0.03, 0.1, 0.3]            # smoothness penalty of the shared lighting (0.1 was best in the first run, 10 was always bad)
+LOCAL_DEGREES = [0, 2]                   # degree of the per-point term (0 = per-point constant)
+SIGMA_GRID_DEG = [0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 18, 22, 27, 33, 40]  # candidate blur widths in reflection direction
+RADII_MM = [0.68, 1.36, 2.72, 4.0]       # radii for measuring the normal variation
+R_NOMINAL_MM = 2.72                      # width of one pixel (at distance 1.3 m). Combining the pixel box and the
+                                         # bilinear interpolation used when picking up observations (a triangle of
+                                         # ±1 pixel), the spread is a standard deviation of 1.36 mm per axis, the
+                                         # same as a uniform disc of radius 2.72 mm
+SH_REF_DEGREES = [2, 3, 4, 6]            # reference: per-point SH (sh_oracle.py)
+N_ITER = 10                              # number of alternating updates in fitted
+GN_ITERS = 6                             # number of Gauss-Newton iterations (models with σ fixed)
+GN_FINAL = 3                             # number of Gauss-Newton iterations after σ is chosen in fitted
+X_MAX = 50.0                             # upper limit of the linearization point (radiance; about 0.99 in display values)
+ID_CONTRAST = 0.02                       # points where changing σ changes the training-view error (RMSE of display
+                                         # values) by more than this count as "points where the roughness is
+                                         # determined"
 OBS_CHUNK = 4096
 KE = (LE + 1) ** 2
 L_OF = torch.tensor([math.isqrt(k) for k in range(KE)], dtype=torch.float32, device=DEV)
 
 
-# ---- 表示値と放射輝度の変換（GoLD_rayt の PNG: Reinhard → sRGB の曲線、露出 0） ----
+# ---- Conversion between display values and radiance (GoLD_rayt PNG: Reinhard → sRGB curve, exposure 0) ----
 
 def srgb_to_lin(y):
     return torch.where(y <= 0.04045, y / 12.92, ((y + 0.055) / 1.055) ** 2.4)
@@ -89,13 +102,13 @@ def radiance_to_display(x):
 
 
 def display_slope(x):
-    """表示値 D(x) = srgb(x / (1 + x)) を放射輝度 x で微分した値"""
+    """Derivative of the display value D(x) = srgb(x / (1 + x)) with respect to the radiance x"""
     t = (x / (1 + x)).clamp(min=1e-6)
     d = torch.where(t <= 0.0031308, torch.full_like(t, 12.92), 1.055 / 2.4 * t ** (1 / 2.4 - 1))
     return d * (1 - t) ** 2  # dt/dx = 1 / (1 + x)² = (1 − t)²
 
 
-# ---- 観測（見えている (点, 視点) の組を 1 列に並べたもの） ----
+# ---- Observations (the visible (point, view) pairs laid out in one list) ----
 
 class Obs:
     def __init__(self, vis, col, dirs, Ns, space):
@@ -103,18 +116,19 @@ class Obs:
         self.pid, self.n_pts, self.space = p_idx, vis.shape[1], space
         self.ydisp = col[v_idx, p_idx].double()
         d = dirs[v_idx, p_idx]
-        n = Ns[v_idx, p_idx] if Ns.dim() == 3 else Ns[p_idx]  # 法線は点ごと (n_pts, 3) か観測ごと (V, n_pts, 3)
+        n = Ns[v_idx, p_idx] if Ns.dim() == 3 else Ns[p_idx]  # normals are per point (n_pts, 3) or per observation (V, n_pts, 3)
         self.d = d
-        r = d - 2 * (d * n).sum(-1, keepdim=True) * n  # 視線を法線で折り返した方向（env_oracle.reflect と同じ）
+        r = d - 2 * (d * n).sum(-1, keepdim=True) * n  # the view direction mirrored about the normal (same as env_oracle.reflect)
         self.Y = torch.cat([sh_basis(LE, r[i:i + OBS_CHUNK]).float() for i in range(0, len(r), OBS_CHUNK)])
         self.Bl = {}
         self.linearize(None)
 
     def linearize(self, pred):
-        """表示値の誤差を、予測 pred（放射輝度）のまわりで一次近似する（ガウス・ニュートン法）。
-        D(x) ≈ D(p) + D'(p)(x − p) なので |D(x) − y|² ≈ D'(p)² |x − z|²、z = p + (y − D(p)) / D'(p)。
-        この重み D'(p)² と目標 z で重み付き最小二乗を解き、予測を更新して近似し直す。pred=None は観測値の所で近似する。
-        重みはチャンネルごと (m, 3)"""
+        """Linearize the display-value error around the prediction pred (radiance) (Gauss-Newton).
+        D(x) ≈ D(p) + D'(p)(x − p), so |D(x) − y|² ≈ D'(p)² |x − z|², z = p + (y − D(p)) / D'(p).
+        Solve a weighted least squares with this weight D'(p)² and target z, update the prediction, and linearize
+        again. pred=None linearizes at the observed values.
+        The weights are per channel (m, 3)"""
         if self.space == "display":
             self.y, self.w = self.ydisp, torch.ones_like(self.ydisp)
             return
@@ -133,14 +147,14 @@ class Obs:
 
 
 def attenuation(sig, Le=LE):
-    """反射方向で幅 sig（ラジアン）のガウスでぼかすときの、SH の次数ごとの減衰 (…, Ke)"""
+    """Per-degree SH attenuation for blurring with a Gaussian of width sig (radians) in reflection direction (…, Ke)"""
     l = L_OF[:(Le + 1) ** 2]
     return torch.exp(-l * (l + 1) * sig.float()[..., None] ** 2 / 2)
 
 
 def att_rows(o, sig, Le=LE):
-    """観測の行の範囲 sl を受けて、その行のぼけの減衰 (len(sl), Ke) を返す関数。
-    sig は点ごとの σ (n_pts,)、または文字列 "obs"（観測ごとの σ を o.sig_obs (n_obs,) に置いたもの）"""
+    """Function that takes a range sl of observation rows and returns the blur attenuation of those rows (len(sl), Ke).
+    sig is the per-point σ (n_pts,), or the string "obs" (the per-observation σ is placed in o.sig_obs (n_obs,))"""
     if isinstance(sig, str):
         assert sig == "obs"
         s_obs = o.sig_obs
@@ -150,7 +164,8 @@ def att_rows(o, sig, Le=LE):
 
 
 def local_chol(o, L):
-    """点ごとの項の正規方程式 A_p = Σ w Bl Blᵀ + R のコレスキー因子（チャンネルごと） (3, n_pts, K, K)"""
+    """Cholesky factor of the normal equations of the per-point term, A_p = Σ w Bl Blᵀ + R (per channel)
+    (3, n_pts, K, K)"""
     Bl = o.local(L)
     K = Bl.shape[1]
     A = torch.zeros(3, o.n_pts, K, K, dtype=F64, device=DEV)
@@ -160,19 +175,19 @@ def local_chol(o, L):
 
 
 def fit_env(o, sig_pt, Lp, smooths, Le=LE):
-    """点ごとのぼけ sig_pt (n_pts,)（または "obs"、att_rows を参照）を固定して、共有の照明 e を解く
-    （点ごとの項は Schur 補元で消去） -> {s: e (Ke, 3)}"""
+    """Solve the shared lighting e with the per-point blur sig_pt (n_pts,) (or "obs", see att_rows) fixed
+    (the per-point term is eliminated by the Schur complement) -> {s: e (Ke, 3)}"""
     Ke = (Le + 1) ** 2
     att = att_rows(o, sig_pt, Le)
     Bl = o.local(Lp)
     K = Bl.shape[1]
     Lc = local_chol(o, Lp)
     out = {s: torch.zeros(Ke, 3, dtype=F64, device=DEV) for s in smooths}
-    for c in range(3):  # 重みがチャンネルごとに違うので、チャンネルごとに解く
+    for c in range(3):  # the weights differ per channel, so solve per channel
         w, y = o.w[:, c], o.y[:, c]
         S = torch.zeros(Ke, Ke, dtype=F64, device=DEV)
         rhs = torch.zeros(Ke, dtype=F64, device=DEV)
-        M = torch.zeros(o.n_pts, K, Ke, device=DEV)  # Σ w Bl Beᵀ（点ごと）
+        M = torch.zeros(o.n_pts, K, Ke, device=DEV)  # Σ w Bl Beᵀ (per point)
         for i in range(0, len(o.pid), OBS_CHUNK):
             sl = slice(i, i + OBS_CHUNK)
             Be = o.Y[sl, :Ke] * att(sl)
@@ -203,8 +218,9 @@ def env_pred(o, e, sig_pt, Le=LE):
 
 
 def predict(o_tr, o_te, e, sig_pt, Lp, Le=LE):
-    """照明 e とぼけ σ を固定し、点ごとの係数を学習視点で解いて、学習・テストの予測（当てはめの空間）を返す。
-    e=None なら点ごとの項だけ（点ごとの SH）"""
+    """With the lighting e and the blur σ fixed, solve the per-point coefficients on the training views and return
+    the training and test predictions (in the space of the fit).
+    e=None means the per-point term only (per-point SH)"""
     if e is None:
         ptr = torch.zeros(len(o_tr.pid), 3, dtype=F64, device=DEV)
         pte = torch.zeros(len(o_te.pid), 3, dtype=F64, device=DEV)
@@ -231,7 +247,8 @@ def psnr(o, pred):
 
 
 def search_sigma(o, e, Lp, grid):
-    """照明 e を固定し、点ごとに格子の各 σ で点ごとの項を解き直したときの、学習視点の表示値の平均二乗誤差 (n_pts, S)"""
+    """With the lighting e fixed, the mean squared error of display values on the training views when the per-point
+    term is solved again for each σ of the grid, per point (n_pts, S)"""
     nS = len(grid)
     A = attenuation(grid)                                                        # (S, Ke)
     E_all = (A[:, :, None] * e.float()[None]).permute(1, 0, 2).reshape(KE, -1)  # (Ke, S·3)
@@ -256,7 +273,8 @@ def search_sigma(o, e, Lp, grid):
 
 
 def run_fixed(o_tr, o_te, sig, Lp, s, iters=GN_ITERS):
-    """σ を固定して、ガウス・ニュートン法で表示値の誤差を最小にする。sig=None は点ごとの項だけ（照明なし）"""
+    """Minimize the display-value error by Gauss-Newton with σ fixed.
+    sig=None means the per-point term only (no lighting)"""
     o_tr.linearize(None)
     hist = []
     e = None
@@ -269,7 +287,8 @@ def run_fixed(o_tr, o_te, sig, Lp, s, iters=GN_ITERS):
 
 
 def run_fitted(o_tr, o_te, Lp, s, grid):
-    """点ごとの σ と照明 e を交互に解く（σ = 0 から始める）。各回でガウス・ニュートン法の近似も取り直す"""
+    """Solve the per-point σ and the lighting e alternately (starting from σ = 0).
+    The Gauss-Newton linearization is also redone each time"""
     o_tr.linearize(None)
     sig = torch.zeros(o_tr.n_pts, device=DEV)
     hist = []
@@ -288,10 +307,11 @@ def run_fitted(o_tr, o_te, Lp, s, grid):
     return sig, e, ptr, pte, search_sigma(o_tr, e, Lp, grid), hist
 
 
-# ---- 法線のばらつき ----
+# ---- Normal variation ----
 
 def mean_normal_length(P, Nc, D, ND, radii_m):
-    """各点のまわり半径 R にある表面の法線の平均ベクトルの長さ |n̄|（R ごと）。点の法線と反対を向く面（薄い部分の裏側）は除く"""
+    """Length |n̄| of the mean vector of the surface normals within radius R around each point (for each R).
+    Faces pointing away from the normal of the point (the back side of thin parts) are excluded"""
     tree = cKDTree(D)
     out = {}
     for R in radii_m:
@@ -307,11 +327,12 @@ def mean_normal_length(P, Nc, D, ND, radii_m):
 
 
 def sigma_from_length(ln):
-    """|n̄| から反射方向のぼけの幅 σ_r = 2 σ_n、σ_n = √(1 − |n̄|)（ラジアン、格子の最大値で頭打ち）"""
+    """From |n̄|, the blur width in reflection direction σ_r = 2 σ_n, σ_n = √(1 − |n̄|)
+    (radians, capped at the maximum of the grid)"""
     return np.minimum(2 * np.sqrt(np.clip(1 - ln, 0, None)), math.radians(SIGMA_GRID_DEG[-1]))
 
 
-# ---- 図 ----
+# ---- Figures ----
 
 def setup_plt():
     import matplotlib
@@ -324,14 +345,15 @@ def setup_plt():
     return plt
 
 
-def scatter_panel(ax, meas_deg, fit_deg, title, ylabel="点ごとに最適なぼけの幅 [度]"):
-    """横軸 = 測ったばらつきから換算したぼけ、縦軸 = 当てはめたぼけ。点と、横軸の 8 分位ごとの中央値（帯は 25〜75%）"""
+def scatter_panel(ax, meas_deg, fit_deg, title, ylabel="Optimal per-point blur width [degrees]"):
+    """Horizontal axis = blur converted from the measured variation, vertical axis = fitted blur.
+    Points, and the median for each octile of the horizontal axis (the band is 25–75%)"""
     top = SIGMA_GRID_DEG[-1] + 2
     ax.set_facecolor(so.C_SURF)
     rng = np.random.default_rng(0)
-    jit = rng.uniform(-0.35, 0.35, len(fit_deg))  # 縦は格子の値しか取らないので、重なりが見えるように少しずらす
-    ax.scatter(meas_deg, fit_deg + jit, s=5, color=so.C_SERIES["gold"], alpha=0.25, lw=0, label="点（粗さが観測から決まる点）")
-    ax.plot([0, top], [0, top], color=so.C_TEXT2, lw=1.0, ls=(0, (4, 3)), label="y = x（換算どおり）")
+    jit = rng.uniform(-0.35, 0.35, len(fit_deg))  # the vertical axis takes only grid values, so jitter a little to show overlaps
+    ax.scatter(meas_deg, fit_deg + jit, s=5, color=so.C_SERIES["gold"], alpha=0.25, lw=0, label="Points (points where the roughness is determined by the observations)")
+    ax.plot([0, top], [0, top], color=so.C_TEXT2, lw=1.0, ls=(0, (4, 3)), label="y = x (as converted)")
     edges = np.quantile(meas_deg, np.linspace(0, 1, 9))
     xc, med, q1, q3 = [], [], [], []
     for a, b in zip(edges[:-1], edges[1:]):
@@ -344,10 +366,10 @@ def scatter_panel(ax, meas_deg, fit_deg, title, ylabel="点ごとに最適なぼ
     xc, med = np.array(xc), np.array(med)
     ax.fill_between(xc, q1, q3, color=so.C_SERIES["matte"], alpha=0.18, lw=0)
     ax.plot(xc, med, color=so.C_SERIES["matte"], lw=2, marker="o", ms=4.5, mec=so.C_SURF, mew=1.0,
-            label="測ったばらつきの 8 分位ごとの中央値（帯は 25〜75%）")
+            label="Median for each octile of the measured variation (the band is 25–75%)")
     ax.set_xlim(0, top)
     ax.set_ylim(-1, top)
-    ax.set_xlabel(f"測った法線のばらつきから換算したぼけの幅 [度]（半径 {R_NOMINAL_MM:g} mm）")
+    ax.set_xlabel(f"Blur width converted from the measured normal variation [degrees] (radius {R_NOMINAL_MM:g} mm)")
     ax.set_ylabel(ylabel)
     ax.grid(color=so.C_GRID, lw=0.6)
     ax.set_axisbelow(True)
@@ -360,7 +382,7 @@ def plot(meas_deg, fit_deg, rho, n_id, rows, path):
     plt = setup_plt()
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11.0, 4.6), dpi=200, facecolor=so.C_SURF,
                                    gridspec_kw={"width_ratios": [1.0, 1.25]})
-    scatter_panel(ax1, meas_deg, fit_deg, f"(a) 粗さの比較（反射方向で、{n_id} 点、Spearman ρ = {rho:.2f}）")
+    scatter_panel(ax1, meas_deg, fit_deg, f"(a) Roughness comparison (in reflection direction, {n_id} points, Spearman ρ = {rho:.2f})")
 
     ax2.set_facecolor(so.C_SURF)
     names = [r[0] for r in rows]
@@ -374,12 +396,12 @@ def plot(meas_deg, fit_deg, rho, n_id, rows, path):
     ax2.set_yticks(ys)
     ax2.set_yticklabels(names, fontsize=7.5)
     ax2.invert_yaxis()
-    ax2.set_xlabel("テスト視点の観測色の PSNR [dB]（遮られない観測だけ）")
+    ax2.set_xlabel("Test-view PSNR of the observed colour [dB] (unoccluded observations only)")
     ax2.grid(axis="x", color=so.C_GRID, lw=0.6)
     ax2.set_axisbelow(True)
     ax2.spines[["top", "right"]].set_visible(False)
-    ax2.set_title(f"(b) テスト視点での再現度（横軸は {lo} dB から）", fontsize=9, loc="left")
-    fig.suptitle("金の像: 画素の中の法線のばらつきから決めた粗さと、点ごとに最適化した粗さ（共有の照明 + 点ごとの定数）",
+    ax2.set_title(f"(b) Reconstruction quality on the test views (horizontal axis starts at {lo} dB)", fontsize=9, loc="left")
+    fig.suptitle("Gold statue: roughness determined from the normal variation within a pixel, and roughness optimized per point (shared lighting + per-point constant)",
                  fontsize=10, x=0.01, ha="left")
     fig.tight_layout()
     fig.savefig(path, facecolor=so.C_SURF)
@@ -387,17 +409,17 @@ def plot(meas_deg, fit_deg, rho, n_id, rows, path):
 
 
 def prepare(t0):
-    """点・法線のばらつき・遮られない観測を用意する（env_rough_check.py からも使う）"""
+    """Prepare the points, the normal variation and the unoccluded observations (also used from env_rough_check.py)"""
     v, f = so.load_mesh()
-    P, N = so.sample_surface(v, f, 10000, seed=1)       # 面の法線 N は可視判定に使う（前回までと同じ）
-    Ns = eo.smooth_normals(10000, seed=1)                 # 反射方向はレンダラーと同じ、なめらかな法線で
+    P, N = so.sample_surface(v, f, 10000, seed=1)       # the face normal N is used for the visibility test (as before)
+    Ns = eo.smooth_normals(10000, seed=1)                 # for the reflection direction, the same smooth normals as the renderer
     D, ND = so.sample_surface(v, f, 2_000_000, seed=2)
     NDs = eo.smooth_normals(2_000_000, seed=2)
 
     radii = [r / 1000 for r in RADII_MM]
     ln_smooth = mean_normal_length(P, Ns, D, NDs, radii)
     ln_face = mean_normal_length(P, N, D, ND, [R_NOMINAL_MM / 1000, 0.00135])
-    print(f"法線の読み込みとばらつきの計測: {time.time() - t0:.0f} 秒", flush=True)
+    print(f"Loading normals and measuring the variation: {time.time() - t0:.0f} s", flush=True)
 
     lo, hi = v.min(0) - 0.01, v.max(0) + 0.01
     P_t, N_t, Ns_t, D_t = (torch.tensor(x, dtype=torch.float32, device=DEV) for x in (P, N, Ns, D))
@@ -410,7 +432,7 @@ def prepare(t0):
     keep = obs["train"][0].sum(0) >= so.MIN_TRAIN_OBS
     obs = {s: [x[:, keep] for x in o] for s, o in obs.items()}
     Nk = Ns_t[keep]
-    for split, (vis, col, dirs) in obs.items():  # 像自身に遮られる観測を除く（env_diagnose.py と同じ判定）
+    for split, (vis, col, dirs) in obs.items():  # remove observations occluded by the statue itself (same test as env_diagnose.py)
         r = eo.reflect(dirs, Nk)
         V, n = vis.shape
         Pb = P_t[keep][None].expand(V, n, 3)
@@ -420,9 +442,9 @@ def prepare(t0):
     ok = obs["train"][0].sum(0) >= so.MIN_TRAIN_OBS
     obs = {s: [x[:, ok] for x in o] for s, o in obs.items()}
     Np = Nk[ok]
-    sel = keep.cpu().numpy().nonzero()[0][ok.cpu().numpy()]  # 元の 10000 点のうち使う点
-    print(f"点 {len(sel)}、遮られない観測 学習 {int(obs['train'][0].sum())} / テスト {int(obs['test'][0].sum())}"
-          f"（{time.time() - t0:.0f} 秒）", flush=True)
+    sel = keep.cpu().numpy().nonzero()[0][ok.cpu().numpy()]  # the points used, out of the original 10000
+    print(f"Points {len(sel)}, unoccluded observations: train {int(obs['train'][0].sum())} / test {int(obs['test'][0].sum())}"
+          f" ({time.time() - t0:.0f} s)", flush=True)
     sig_meas = {R: torch.tensor(sigma_from_length(ln_smooth[R][sel]), dtype=torch.float32, device=DEV) for R in radii}
     return obs, Np, sel, radii, ln_smooth, ln_face, sig_meas
 
@@ -437,15 +459,16 @@ def main():
         for R, x in ln.items():
             deg = np.degrees(np.arccos(np.clip(x[sel], -1, 1)))
             spread[f"{name}_R{R * 1000:.2f}mm"] = {"median": float(np.median(deg)), "p90": float(np.percentile(deg, 90))}
-            print(f"法線のばらつき（{'なめらかな法線' if name == 'smooth' else '面の法線'}、半径 {R * 1000:.2f} mm）: "
-                  f"中央値 {np.median(deg):.1f}°、90% 点 {np.percentile(deg, 90):.1f}°")
+            print(f"Normal variation ({'smooth normals' if name == 'smooth' else 'face normals'}, radius {R * 1000:.2f} mm): "
+                  f"median {np.median(deg):.1f}°, 90th percentile {np.percentile(deg, 90):.1f}°")
 
-    # 確認: 表示値のまま・ぼけなし・照明 32 次・罰 1 で、env_diagnose.py の「すべての点・遮られない観測だけ」を再現する
+    # Check: in display values, with no blur, lighting of degree 32 and penalty 1, reproduce
+    # "all points, unoccluded observations only" of env_diagnose.py
     o_tr, o_te = Obs(*obs["train"], Np, "display"), Obs(*obs["test"], Np, "display")
     z = torch.zeros(o_tr.n_pts, device=DEV)
-    e = fit_env(o_tr, z, 0, [1.0], Le=32)[1.0]  # 表示値のままなら重みは 1 で、前回と同じ問題になる
+    e = fit_env(o_tr, z, 0, [1.0], Le=32)[1.0]  # in display values the weights are 1, and the problem is the same as before
     check = psnr(o_te, predict(o_tr, o_te, e, z, 0, Le=32)[1])
-    print(f"確認（env_diagnose.py の 24.24 dB と一致するはず）: {check:.2f} dB", flush=True)
+    print(f"Check (should match the 24.24 dB of env_diagnose.py): {check:.2f} dB", flush=True)
     del o_tr, o_te
     torch.cuda.empty_cache()
 
@@ -455,7 +478,7 @@ def main():
 
     def record(key, ptr, pte, hist):
         res["models"][key] = {"train": psnr(o_tr, ptr), "test": psnr(o_te, pte), "train_mse_history": hist}
-        print(f"  {key:<34} 学習 {res['models'][key]['train']:6.2f}  テスト {res['models'][key]['test']:6.2f} dB",
+        print(f"  {key:<34} train {res['models'][key]['train']:6.2f}  test {res['models'][key]['test']:6.2f} dB",
               flush=True)
 
     for L in SH_REF_DEGREES:
@@ -465,7 +488,7 @@ def main():
     fitted = {}
     for Lp in LOCAL_DEGREES:
         for s in ENV_SMOOTH:
-            print(f"点ごとの項 L={Lp}、照明の罰 {s:g}（{time.time() - t0:.0f} 秒）", flush=True)
+            print(f"Per-point term L={Lp}, lighting penalty {s:g} ({time.time() - t0:.0f} s)", flush=True)
             _, ptr, pte, hist = run_fixed(o_tr, o_te, z, Lp, s)
             record(f"Lp{Lp}_s{s:g}_material", ptr, pte, hist)
             for R in radii:
@@ -480,7 +503,7 @@ def main():
         k = max(ks, key=lambda k: res["models"][k]["test"])
         return k, res["models"][k]["test"]
 
-    # 粗さの比較は、点ごとの定数のモデルで最もテストの良い罰のもの
+    # The roughness comparison uses the per-point constant model, with the penalty that is best on the test views
     k_fit, _ = best("Lp0_", "_fitted")
     s_fit = float(k_fit.split("_s")[1].split("_")[0])
     sig, loss = fitted[(0, s_fit)]
@@ -501,15 +524,15 @@ def main():
                        "frac_zero_identifiable": float((fit_deg[ident] == 0).mean())},
         "measured_deg_nominal": {"median_identifiable": float(np.median(meas_deg[ident])),
                                  "median_all": float(np.median(meas_deg))}}
-    print(f"粗さが決まる点: {ident.sum()} / {len(ident)}、Spearman ρ（半径 {R_NOMINAL_MM} mm）= {rho:.3f}")
+    print(f"Points where the roughness is determined: {ident.sum()} / {len(ident)}, Spearman ρ (radius {R_NOMINAL_MM} mm) = {rho:.3f}")
     for k, c in corr.items():
-        print(f"  {k}: ρ（決まる点）{c['spearman_identifiable']:.3f}、ρ（全点）{c['spearman_all']:.3f}")
+        print(f"  {k}: ρ (determined points) {c['spearman_identifiable']:.3f}, ρ (all points) {c['spearman_all']:.3f}")
 
-    rows = [("点ごとの SH（参考、最良の次数）", max(res["models"][f"per_point_sh_L{L}"]["test"] for L in SH_REF_DEGREES), False),
-            ("材質の粗さだけ（全点で共通のぼけ）", best("Lp0_", "_material")[1], False)]
+    rows = [("Per-point SH (reference, best degree)", max(res["models"][f"per_point_sh_L{L}"]["test"] for L in SH_REF_DEGREES), False),
+            ("Material roughness only (same blur for all points)", best("Lp0_", "_material")[1], False)]
     for R in RADII_MM:
-        rows.append((f"測ったばらつきから換算（半径 {R:g} mm）", best("Lp0_", f"_measured_R{R:.2f}")[1], R == R_NOMINAL_MM))
-    rows.append(("点ごとに最適化した粗さ", best("Lp0_", "_fitted")[1], False))
+        rows.append((f"Converted from the measured variation (radius {R:g} mm)", best("Lp0_", f"_measured_R{R:.2f}")[1], R == R_NOMINAL_MM))
+    rows.append(("Per-point optimized roughness", best("Lp0_", "_fitted")[1], False))
     res["summary_test_psnr_Lp0"] = {name: v for name, v, _ in rows}
     res["summary_test_psnr_Lp2"] = {"material": best("Lp2_", "_material")[1],
                                     "measured_nominal": best("Lp2_", f"_measured_R{R_NOMINAL_MM:.2f}")[1],
@@ -518,7 +541,7 @@ def main():
     plot(meas_deg[ident], fit_deg[ident], rho, int(ident.sum()), rows, HERE / "figures" / "env_rough.png")
     for name, v, _ in rows:
         print(f"{name:<32} {v:6.2f} dB")
-    print(f"-> {HERE / 'env_rough.json'}, figures/env_rough.png（{time.time() - t0:.0f} 秒）")
+    print(f"-> {HERE / 'env_rough.json'}, figures/env_rough.png ({time.time() - t0:.0f} s)")
 
 
 if __name__ == "__main__":

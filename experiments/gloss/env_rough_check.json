@@ -33,13 +33,13 @@
   }
  },
  "correlates": {
-  "測った法線のばらつき（半径 2.72 mm）": 0.14026936162026987,
-  "光源の視差（像の中心から見た向きとの差、最大）": -0.14992009541425813,
-  "像の中心からの距離": -0.15679758277706127,
-  "高さ": 0.030098175749417214,
-  "反射光線が光源に当たる観測の割合": -0.14840181068005132,
-  "学習視点の観測数": -0.2245041860815769,
-  "視線と法線の cos の平均": -0.17366290827328026
+  "Measured normal variation (radius 2.72 mm)": 0.14026936162026987,
+  "Light parallax (difference from the direction seen from the statue centre, max)": -0.14992009541425813,
+  "Distance from the statue centre": -0.15679758277706127,
+  "Height": 0.030098175749417214,
+  "Fraction of observations whose reflected ray hits a light": -0.14840181068005132,
+  "Number of training-view observations": -0.2245041860815769,
+  "Mean cos between view direction and normal": -0.17366290827328026
  },
  "parallax_deg": {
   "median": 3.6623209391042124,

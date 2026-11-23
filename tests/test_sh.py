@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-任意次数の SH 基底 (sh_basis) の検算:
-  1. 3 次までは公式実装と同じ式の eval_sh と一致する
-  2. 正規直交（球面上で積分すると単位行列）
+Checks of the arbitrary-degree SH basis (sh_basis):
+  1. Up to degree 3 it agrees with eval_sh, which uses the same formulas as the official implementation
+  2. Orthonormal (integrating over the sphere gives the identity matrix)
 
     python tests/test_sh.py
 """
@@ -29,13 +29,13 @@ def main():
         print(f"deg {deg}: |eval_sh - sh_basis| max = {err:.2e}")
         ok &= err < 1e-10
 
-    # 正規直交性: 球面上の一様な点で Y Yᵀ を平均して 4π を掛けると単位行列になる
+    # Orthonormality: averaging Y Yᵀ over uniform points on the sphere and multiplying by 4π gives the identity matrix
     deg = 12
     u = torch.nn.functional.normalize(torch.randn(400000, 3, generator=g, dtype=torch.float64), dim=-1)
     Y = sh_basis(deg, u)
     G = 4 * math.pi * Y.T @ Y / len(u)
     err = (G - torch.eye(G.shape[0], dtype=torch.float64)).abs().max().item()
-    print(f"deg {deg}: 正規直交性の誤差（モンテカルロ積分）max = {err:.3f}")
+    print(f"deg {deg}: orthonormality error (Monte Carlo integration) max = {err:.3f}")
     ok &= err < 0.05
     print("OK" if ok else "NG")
     sys.exit(0 if ok else 1)

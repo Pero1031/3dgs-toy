@@ -1,25 +1,34 @@
 # -*- coding: utf-8 -*-
 """
-段階 3: 3dgs-toy に遅延シェーディングを足す（反射方向で共有の環境照明を引く。3DGS-DR や Ref-GS と同じ系統の簡略版）。
+Stage 3: add deferred shading to 3dgs-toy (look up shared environment lighting in the reflection direction.
+A simplified version in the same family as 3DGS-DR and Ref-GS).
 
-各ガウシアンは、色の SH の代わりに次を持つ:
-    法線   一番短い軸（カメラ側に向ける）。パラメータは持たず、回転と大きさから決まる
-    base   放射輝度の定数項 (3)（softplus）。オラクルの「点ごとの定数」に当たる
-    rough  材質の粗さに当たる、反射方向でのぼけの幅 (1)（sigmoid × SIG_MAX）
+Instead of colour SH, each Gaussian holds:
+    normal  the shortest axis (turned toward the camera). It has no parameters and is determined by rotation and size
+    base    constant term of the radiance (3) (softplus). Corresponds to the "per-point constant" of the oracle
+    rough   width of the blur in the reflection direction, corresponding to material roughness (1) (sigmoid × SIG_MAX)
 
-描画は 2 段階:
-    1. ラスタライザで、法線・base・rough を色と同じように α ブレンドする（gs/rasterize.py。チャンネル数は任意）
-    2. 画素ごとに、合成した法線 Σwn の向きで視線を反射させ、共有の環境照明をぼけの幅 σ でぼかして引く:
-           放射輝度 = Σw·base + A·L_env(r, σ) + (1 − A)·背景      （A は累積不透明度）
-       σ の決め方（mode）:
-           learned  σ = 合成した rough / A                          既存手法と同じく、粗さを学習する
-           toksvig  σ = 2√(1 − |n̄|) · √((1 + cos²θ)/2)、|n̄| = |Σwn| / A   粗さは学習しない（段階 2 の換算と同じ）
-           both     σ = √(toksvig² + learned²)                       形状のぼけは換算、材質の粗さだけ学習する
-       表示値への変換（Reinhard → sRGB の曲線）も画像と同じにして、表示値で誤差をとる。
+Rendering has 2 steps:
+    1. The rasterizer α-blends the normal, base, and rough in the same way as colour (gs/rasterize.py. Any number
+       of channels)
+    2. For each pixel, reflect the view direction about the composited normal Σwn, and look up the shared environment
+       lighting blurred with width σ:
+           radiance = Σw·base + A·L_env(r, σ) + (1 − A)·background    (A: accumulated opacity)
+       How σ is set (mode):
+           learned  σ = composited rough / A
+                    roughness is learned, as in existing methods
+           toksvig  σ = 2√(1 − |n̄|) · √((1 + cos²θ)/2), |n̄| = |Σwn| / A
+                    roughness is not learned (same as the conversion of stage 2)
+           both     σ = √(toksvig² + learned²)
+                    the geometric blur is converted, and only the material roughness is learned
+       The conversion to display values (Reinhard → sRGB curve) is also the same as for the images, and the error
+       is taken in display values.
 
-環境照明は SH（LE 次）の係数で持つ。ぼけた照明の引き方は、SIG_LEVELS の各幅でぼかした SH を正距円筒の
-テクスチャに展開し（基底は前もって計算しておく）、反射方向と σ で 3 次元の線形補間をする（grid_sample）。
-SH の高い次数を画素ごとに微分可能に評価すると重すぎるので、テクスチャを介して照明・方向・σ のすべてに勾配を流す。
+The environment lighting is held as SH coefficients (degree LE). To look up blurred lighting, the SH blurred at each
+width of SIG_LEVELS is expanded into equirectangular textures (the basis is computed in advance), and 3D linear
+interpolation is done over reflection direction and σ (grid_sample).
+Evaluating high SH degrees differentiably per pixel is too heavy, so gradients flow to all of the lighting, the
+direction, and σ through the textures.
 """
 
 import math
@@ -36,14 +45,14 @@ from gs.gaussians import GaussianModel, inverse_sigmoid, knn_mean_sq_dist  # noq
 from gs.rasterize import conic_and_radius, covariance_3d, project_gaussians, quat_to_rotmat, rasterize  # noqa: E402
 from gs.sh import sh_basis  # noqa: E402
 
-LE = 48                                   # 環境照明の SH の次数（オラクルと同じ）
-SIG_MAX = math.radians(40.0)              # ぼけの幅の上限
-SIG_STEP = math.radians(2.0)              # ぼかした照明を用意する幅の間隔（その間は線形補間）
-TEX_H, TEX_W = 128, 256                   # 照明を展開する正距円筒のテクスチャ（1 画素 1.4°）
+LE = 48                                   # SH degree of the environment lighting (same as the oracle)
+SIG_MAX = math.radians(40.0)              # upper limit of the blur width
+SIG_STEP = math.radians(2.0)              # spacing of the widths at which blurred lighting is prepared (linear interpolation in between)
+TEX_H, TEX_W = 128, 256                   # equirectangular texture into which the lighting is expanded (1 pixel = 1.4°)
 MODES = ("learned", "toksvig", "both")
 
 
-# ---- 表示値と放射輝度の変換（env_rough.py と同じ。画像は Reinhard → sRGB の曲線） ----
+# ---- Conversion between display values and radiance (same as env_rough.py. Images: Reinhard → sRGB curve) ----
 
 def lin_to_srgb(t):
     t = t.clamp(min=0)
@@ -64,22 +73,24 @@ def display_to_radiance(y):
     return t / (1 - t)
 
 
-# ---- 環境照明 ----
+# ---- Environment lighting ----
 
 def dir_to_uv(r):
-    """方向 -> 正距円筒の (u, v) ∈ [0,1)×[0,1]。u は +z から +x への経度、v は +y（北）からの角度"""
+    """Direction -> equirectangular (u, v) ∈ [0,1)×[0,1]. u is the longitude from +z toward +x, v is the angle
+    from +y (north)"""
     u = torch.atan2(r[..., 0], r[..., 2]) / (2 * math.pi) % 1.0
     v = torch.acos(r[..., 1].clamp(-1 + 1e-6, 1 - 1e-6)) / math.pi
     return u, v
 
 
 class EnvSH:
-    """SH の係数で持つ環境照明（放射輝度）。lookup(r, σ) で、反射方向 r を幅 σ のガウスでぼかした値を返す"""
+    """Environment lighting (radiance) held as SH coefficients. lookup(r, σ) returns the value in reflection
+    direction r blurred by a Gaussian of width σ"""
 
     def __init__(self, Le=LE, init=0.3, device="cuda"):
         self.Le, self.Ke = Le, (Le + 1) ** 2
         coef = torch.zeros(self.Ke, 3, device=device)
-        coef[0] = init / 0.28209479177387814  # 一様な明るさ init から始める
+        coef[0] = init / 0.28209479177387814  # start from a uniform brightness init
         self.coef = nn.Parameter(coef)
         v = (torch.arange(TEX_H, device=device) + 0.5) / TEX_H
         u = (torch.arange(TEX_W, device=device) + 0.5) / TEX_W
@@ -92,7 +103,8 @@ class EnvSH:
         self.att = torch.exp(-self.l * (self.l + 1) * sig[:, None] ** 2 / 2)  # (levels, Ke)
 
     def textures(self):
-        """各幅でぼかした照明のテクスチャ (1, 3, levels, TEX_H, TEX_W + 2)。経度方向の継ぎ目のために左右を 1 列ずつ巻いて足す"""
+        """Textures of the lighting blurred at each width (1, 3, levels, TEX_H, TEX_W + 2). One column is wrapped
+        around and added on each side for the seam in longitude"""
         E = self.att[:, :, None] * self.coef[None]                            # (levels, Ke, 3)
         T = (self.B @ E.permute(1, 0, 2).reshape(self.Ke, -1))                # (texels, levels·3)
         T = T.reshape(TEX_H, TEX_W, self.n_levels, 3).permute(3, 2, 0, 1)    # (3, levels, H, W)
@@ -100,21 +112,21 @@ class EnvSH:
         return T[None]
 
     def lookup(self, r, sig, T=None):
-        """r (M,3) 単位ベクトル、sig (M,) ラジアン -> (M,3)。T は textures() の結果（同じ反復で使い回す）"""
+        """r (M,3) unit vectors, sig (M,) radians -> (M,3). T is the result of textures() (reused within the same iteration)"""
         T = self.textures() if T is None else T
         u, v = dir_to_uv(r)
-        x = -1 + 2 * (u * TEX_W + 0.5) / (TEX_W + 1)                        # 巻いて足した列を含めた座標（align_corners=True）
+        x = -1 + 2 * (u * TEX_W + 0.5) / (TEX_W + 1)                        # coordinate including the wrapped columns (align_corners=True)
         y = (-1 + 2 * (v * TEX_H - 0.5) / (TEX_H - 1)).clamp(-1, 1)
         z = (-1 + 2 * (sig / SIG_STEP) / (self.n_levels - 1)).clamp(-1, 1)
         grid = torch.stack([x, y, z], -1).reshape(1, 1, 1, -1, 3)
         return F.grid_sample(T, grid, mode="bilinear", padding_mode="border", align_corners=True)[0, :, 0, 0].T
 
     def smoothness(self):
-        """高い次数ほど重い罰 Σ l(l+1)|e|² / Ke（照明の雑音を抑える）"""
+        """Penalty that is heavier for higher degrees, Σ l(l+1)|e|² / Ke (suppresses noise in the lighting)"""
         return ((self.l * (self.l + 1))[:, None] * self.coef ** 2).mean()
 
 
-# ---- ガウシアン ----
+# ---- Gaussians ----
 
 class DeferredModel(GaussianModel):
     names = ("means", "log_scales", "quats", "opacity_logits", "base", "rough")
@@ -123,13 +135,14 @@ class DeferredModel(GaussianModel):
         super().__init__(sh_degree=0)
 
     def init_on_sphere(self, n, radius, center=(0.0, 0.0, 0.0), flat=0.1, rough_deg=2.0, device="cuda"):
-        """半径 radius の球面に一様に n 個、面に沿った円盤（法線方向の大きさは flat 倍）として置く。
-        形状の大まかな初期値（3DGS では SfM の点に当たる）は分かっているとする"""
+        """Place n Gaussians uniformly on a sphere of radius radius, as discs lying along the surface (the size in
+        the normal direction is flat times the size along the surface).
+        A rough initial shape (corresponding to the SfM points in 3DGS) is assumed to be known"""
         g = torch.Generator(device="cpu").manual_seed(0)
         nrm = F.normalize(torch.randn(n, 3, generator=g), dim=-1).to(device)
         xyz = radius * nrm + torch.tensor(center, device=device)
         dist = torch.sqrt(knn_mean_sq_dist(xyz).clamp(min=1e-10))
-        # 局所の z 軸を法線に向ける回転（z × n の軸まわりに acos(n_z)）。[w, x, y, z]
+        # rotation that turns the local z axis toward the normal (by acos(n_z) about the axis z × n). [w, x, y, z]
         q = F.normalize(torch.stack([1 + nrm[:, 2], -nrm[:, 1], nrm[:, 0], torch.zeros_like(nrm[:, 0])], -1), dim=-1)
         ls = torch.log(dist)[:, None].repeat(1, 3)
         ls[:, 2] += math.log(flat)
@@ -138,7 +151,7 @@ class DeferredModel(GaussianModel):
             "log_scales": ls,
             "quats": q,
             "opacity_logits": inverse_sigmoid(torch.full((n, 1), 0.5, device=device)),
-            "base": torch.full((n, 3), math.log(math.expm1(0.01)), device=device),   # softplus で 0.01
+            "base": torch.full((n, 3), math.log(math.expm1(0.01)), device=device),   # 0.01 after softplus
             "rough": inverse_sigmoid(torch.full((n, 1), rough_deg / math.degrees(SIG_MAX), device=device)),
         })
 
@@ -153,7 +166,7 @@ class DeferredModel(GaussianModel):
 
 
 def gaussian_normals(scales, quats, means, cam_center):
-    """一番短い軸の向き（カメラ側に向ける）(N,3)"""
+    """Direction of the shortest axis (turned toward the camera) (N,3)"""
     R = quat_to_rotmat(quats)
     idx = scales.argmin(dim=1)
     n = R.gather(2, idx[:, None, None].expand(-1, 3, 1)).squeeze(-1)
@@ -162,18 +175,19 @@ def gaussian_normals(scales, quats, means, cam_center):
 
 
 def pixel_dirs(cam):
-    """画素中心を通る視線（カメラ → 物体）のワールドでの向き (H, W, 3)"""
+    """World-space direction of the view ray (camera → object) through each pixel centre (H, W, 3)"""
     dev = cam.R.device
     j, i = torch.meshgrid(torch.arange(cam.H, device=dev), torch.arange(cam.W, device=dev), indexing="ij")
     d = torch.stack([(i + 0.5 - cam.cx) / cam.fx, (j + 0.5 - cam.cy) / cam.fy, torch.ones_like(i, dtype=torch.float32)], -1)
-    return F.normalize(d @ cam.R, dim=-1)   # cam.R は world -> camera なので、行ベクトルに右から掛けると camera -> world
+    return F.normalize(d @ cam.R, dim=-1)   # cam.R is world -> camera, so multiplying a row vector from the right gives camera -> world
 
 
 def render_deferred(model, env, cam, mode, bg_rad, tile=8, max_entries=2 ** 24, near=0.2, T=None):
     """
     Returns dict:
-        image (H,W,3) 表示値、alpha (H,W)、means2d / ids / on_screen / radius（densification 用。render.py と同じ）
-        len_n (H,W) |n̄|、sig_geo (H,W) 換算のぼけ、sig_mat (H,W) 合成した rough、sigma (H,W) 実際に使ったぼけ
+        image (H,W,3) display values, alpha (H,W), means2d / ids / on_screen / radius (for densification. Same as
+        render.py)
+        len_n (H,W) |n̄|, sig_geo (H,W) converted blur, sig_mat (H,W) composited rough, sigma (H,W) blur actually used
     """
     p = model.params
     with torch.no_grad():

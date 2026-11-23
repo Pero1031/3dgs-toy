@@ -1,33 +1,40 @@
 # -*- coding: utf-8 -*-
 """
-段階 2: 条件を制御した球のデータを GoLD_rayt で作る（画素より細かい凹凸は、粗さとして効くか）。
+Stage 2: make sphere data with controlled conditions using GoLD_rayt (do bumps finer than a pixel act as roughness?).
 
-像の結果（env_rough.py）では、点ごとに最適化した粗さは画素の中の法線のばらつきとほとんど相関しなかった。
-像には相互反射・近い光源の視差・向きのそろった襞・デノイザーが重なっていて切り分けられないので、
-それらを外した条件で同じ問いを立て直す:
+In the statue results (env_rough.py), the roughness optimized per point hardly correlated with the normal variation
+within a pixel. On the statue, interreflection, the parallax of near light sources, folds with aligned orientation,
+and the denoiser all overlap and cannot be separated, so the same question is posed again with those removed:
 
-    形状   半径 0.2 m の球（凸なので相互反射も自己遮蔽もない）。経度で 45° ずつ 8 区画に分ける
-    照明   HDR の環境マップだけ（遠方照明なので視差がない）
-    素材   金（GGX、roughness 0.1 = α 0.01。像と同じ）
-    区画   smooth_a / smooth_b : 凹凸なし
-           bump3 / bump6 / bump12 : 等方な凹凸。法線の傾きが 1 軸あたり標準偏差 3° / 6° / 12°、波長およそ 4 mm
-           brdf3 / brdf6 / brdf12 : 凹凸なし。材質の粗さを、法線分布の半値幅が bump と同じになる GGX α にしたもの
-                                   （凹凸ではなく材質の粗さによるぼけの対照）
-    画像   512 px で描き（1 画素 1.36 mm）、放射輝度のまま 2x2・4x4 で平均して 256 px（2.72 mm）・128 px（5.44 mm）も作る。
-           同じ視点のまま画素の大きさだけが変わるので、凹凸が画素より大きい・同じくらい・小さい の 3 通りになる
+    Shape     a sphere of radius 0.2 m (convex, so no interreflection and no self-occlusion). Divided into 8 sectors
+              of 45° of longitude each
+    Lighting  an HDR environment map only (distant lighting, so no parallax)
+    Material  gold (GGX, roughness 0.1 = α 0.01. Same as the statue)
+    Sectors   smooth_a / smooth_b : no bumps
+              bump3 / bump6 / bump12 : isotropic bumps. The tilt of the normal has a standard deviation of
+                                      3° / 6° / 12° per axis, wavelength about 4 mm
+              brdf3 / brdf6 / brdf12 : no bumps. The material roughness is set to the GGX α whose normal
+                                      distribution has the same half width at half maximum as bump
+                                      (a control where the blur comes from material roughness, not from bumps)
+    Images    rendered at 512 px (1 pixel = 1.36 mm), then averaged over 2x2 and 4x4 in radiance to also make
+              256 px (2.72 mm) and 128 px (5.44 mm). The views stay the same and only the pixel size changes,
+              so there are 3 cases: the bumps are larger than, about the same as, or smaller than a pixel
 
-凹凸は 3 次元の平面波の和（K 本、波長 λ、向きと位相はランダム）を球面上で評価した等方なガウス場 g に、区画ごとの振幅を
-掛けたもの。法線はその勾配から解析的に求めて頂点法線として PLY に書く（GoLD_rayt は頂点法線を三角形の中で補間する）。
-GoLD_rayt には法線マップがないので、凹凸は細かいメッシュ（正二十面体の 9 回分割、約 520 万三角形）に焼き込む。
+The bumps are an isotropic Gaussian field g, made as a sum of 3D plane waves (K waves, wavelength λ, random direction
+and phase) evaluated on the sphere, multiplied by a per-sector amplitude. The normals are computed analytically from
+its gradient and written to the PLY as vertex normals (GoLD_rayt interpolates vertex normals within triangles).
+GoLD_rayt has no normal maps, so the bumps are baked into a fine mesh (an icosahedron subdivided 9 times, about
+5.2 million triangles).
 
-    python experiments/gloss/make_sphere.py mesh                 # メッシュを書き、凹凸の傾きを検算する
+    python experiments/gloss/make_sphere.py mesh                 # write the mesh and check the tilt of the bumps
     python experiments/gloss/make_sphere.py views [--render] [--limit N] [--spp N]
-    python experiments/gloss/make_sphere.py post                 # 3DGS で学習する用の PNG と transforms_*.json
+    python experiments/gloss/make_sphere.py post                 # PNGs and transforms_*.json for training 3DGS
 
--> data/gloss_sphere/ に mesh/*.ply と mesh/check.json、scenes/*.json、render/{train,test}/*.pfm（512 px、線形の放射輝度。
-   *_denoised.pfm はデノイズ後、*_mask.pfm は球のマスク）。256・128 px への縮小は解析側（sphere_rough.py）で行う。
-   post は s{512,256,128}/{train,test}/*.png（表示値。背景は一様な灰色 BG_DISPLAY に置き換える）、
-   s*/masks/{train,test}/*.png（球のマスク）、s*/transforms_{train,test}.json を書く
+-> in data/gloss_sphere/: mesh/*.ply and mesh/check.json, scenes/*.json, render/{train,test}/*.pfm (512 px, linear
+   radiance. *_denoised.pfm is after denoising, *_mask.pfm is the sphere mask). The reduction to 256 and 128 px is
+   done on the analysis side (sphere_rough.py).
+   post writes s{512,256,128}/{train,test}/*.png (display values. The background is replaced with a uniform grey
+   BG_DISPLAY), s*/masks/{train,test}/*.png (sphere masks), and s*/transforms_{train,test}.json
 """
 
 import argparse
@@ -48,17 +55,17 @@ from make_views import CWD, EXE  # noqa: E402
 
 DATA = ROOT / "data" / "gloss_sphere"
 
-# ---- 形状 ----
-R0 = 0.2                 # 球の半径 [m]
-LAMBDA = 0.004           # 平面波の波長 [m]（球面上ではこれ以上の波長になる）
-K_WAVES = 256            # 平面波の本数
+# ---- Shape ----
+R0 = 0.2                 # radius of the sphere [m]
+LAMBDA = 0.004           # wavelength of the plane waves [m] (on the sphere the wavelength is this or longer)
+K_WAVES = 256            # number of plane waves
 FIELD_SEED = 7
-ICO_LEVEL = 9            # 正二十面体の分割回数（辺の長さ約 0.41 mm、1 波長に約 10 本）
+ICO_LEVEL = 9            # number of icosahedron subdivisions (edge length about 0.41 mm, about 10 edges per wavelength)
 SECTOR_DEG = 45.0
-RAMP_DEG = 4.0           # 区画の境目で凹凸の振幅をなめらかにつなぐ幅（片側）[度]
-LAT_FULL, LAT_ZERO = 60.0, 70.0  # 緯度がこれを超えると凹凸を弱め、LAT_ZERO で 0 にする（極では区画が集まるので）
-GGX_PER_SLOPE = 1.829    # 法線の傾きが 1 軸あたり標準偏差 s（tan）のガウス分布と、法線分布の半値幅が同じ GGX の α = 1.829 s
-SECTORS = [              # (名前, 凹凸の傾き σ_n [度], 材質)
+RAMP_DEG = 4.0           # width over which the bump amplitude is blended smoothly at sector boundaries (one side) [degrees]
+LAT_FULL, LAT_ZERO = 60.0, 70.0  # above this latitude the bumps are weakened, reaching 0 at LAT_ZERO (the sectors meet at the poles)
+GGX_PER_SLOPE = 1.829    # α of the GGX whose normal distribution has the same half width as a Gaussian normal tilt with standard deviation s (tan) per axis: α = 1.829 s
+SECTORS = [              # (name, bump tilt σ_n [degrees], material)
     ("smooth_a", 0.0, "au"),
     ("bump3", 3.0, "au"),
     ("bump6", 6.0, "au"),
@@ -73,7 +80,7 @@ AU_ROUGHNESS = 0.1
 
 
 def brdf_roughness(sig_deg):
-    """GoLD_rayt の roughness（α = roughness²）"""
+    """GoLD_rayt roughness (α = roughness²)"""
     return math.sqrt(GGX_PER_SLOPE * math.tan(math.radians(sig_deg)))
 
 
@@ -81,20 +88,20 @@ MATERIALS = {"au": {"type": "conductor", "metal": "Au", "roughness": AU_ROUGHNES
 for _name, _sig in BRDF_SIGMA.items():
     MATERIALS[_name] = {"type": "conductor", "metal": "Au", "roughness": round(brdf_roughness(_sig), 4)}
 
-# ---- 照明とカメラ ----
+# ---- Lighting and cameras ----
 ENV_FILE = "assets/env/grace-new.hdr"
 ENV_SCALE = 2.0
 TARGET = [0.0, 0.0, 0.0]
-RADIUS = 1.3             # カメラの距離（像のデータと同じ）
+RADIUS = 1.3             # camera distance (same as the statue data)
 FOV = 30.0
 SIZE = 512
 SCALES = [512, 256, 128]
-RINGS = [-30.0, 0.0, 30.0, 60.0]  # 学習視点の仰角
+RINGS = [-30.0, 0.0, 30.0, 60.0]  # elevations of the training views
 PER_RING = 24
 N_TEST = 12
 
 
-# ---- 凹凸の場 ----
+# ---- Bump field ----
 
 def _waves():
     rng = np.random.default_rng(FIELD_SEED)
@@ -107,7 +114,7 @@ FREQ, PHASE = _waves()
 
 
 def lon_lat(q):
-    """経度（+z から +x へ、0〜360°）と緯度（+y が北）[度]"""
+    """Longitude (from +z toward +x, 0–360°) and latitude (+y is north) [degrees]"""
     lon = np.degrees(np.arctan2(q[..., 0], q[..., 2])) % 360.0
     lat = np.degrees(np.arcsin(np.clip(q[..., 1] / np.linalg.norm(q, axis=-1), -1, 1)))
     return lon, lat
@@ -123,28 +130,30 @@ def _smoothstep(t):
 
 
 def slope_target(q):
-    """点 q での凹凸の傾きの目標（1 軸あたりの標準偏差、tan）。区画の境目と高緯度はなめらかにつなぐ"""
+    """Target bump tilt at point q (standard deviation per axis, tan). Blended smoothly at sector boundaries and
+    at high latitudes"""
     lon, lat = lon_lat(q)
     s = np.array([math.tan(math.radians(sig)) for _, sig, _ in SECTORS])
     k = (lon // SECTOR_DEG).astype(int) % len(SECTORS)
-    off = lon - k * SECTOR_DEG                      # 区画の中での位置 [0, 45)
+    off = lon - k * SECTOR_DEG                      # position within the sector [0, 45)
     val = s[k].copy()
-    lo = off < RAMP_DEG                             # 左の境目の近く: 左隣の区画とつなぐ
+    lo = off < RAMP_DEG                             # near the left boundary: blend with the sector on the left
     t = (off[lo] + RAMP_DEG) / (2 * RAMP_DEG)
     val[lo] = s[(k[lo] - 1) % len(SECTORS)] + (s[k[lo]] - s[(k[lo] - 1) % len(SECTORS)]) * _smoothstep(t)
-    hi = off > SECTOR_DEG - RAMP_DEG                # 右の境目の近く: 右隣の区画とつなぐ
+    hi = off > SECTOR_DEG - RAMP_DEG                # near the right boundary: blend with the sector on the right
     t = (off[hi] - (SECTOR_DEG - RAMP_DEG)) / (2 * RAMP_DEG)
     val[hi] = s[k[hi]] + (s[(k[hi] + 1) % len(SECTORS)] - s[k[hi]]) * _smoothstep(t)
     return val * (1 - _smoothstep((np.abs(lat) - LAT_FULL) / (LAT_ZERO - LAT_FULL)))
 
 
 def amplitude(q):
-    """場 g（分散 1）に掛ける振幅 [m]。1 軸あたりの傾きの分散は a²(2π/λ)²/3 なので、目標の傾き s から a = s λ √3 / 2π"""
+    """Amplitude [m] that multiplies the field g (variance 1). The variance of the tilt per axis is a²(2π/λ)²/3,
+    so from the target tilt s, a = s λ √3 / 2π"""
     return slope_target(q) * LAMBDA * math.sqrt(3) / (2 * math.pi)
 
 
 def field(q, chunk=65536):
-    """g(q) と、その 3 次元の勾配。q は球面上の点 (n, 3) [m]"""
+    """g(q) and its 3D gradient. q is points on the sphere (n, 3) [m]"""
     g = np.empty(len(q))
     dg = np.empty((len(q), 3))
     c = math.sqrt(2.0 / K_WAVES)
@@ -156,8 +165,9 @@ def field(q, chunk=65536):
 
 
 def surface(n0):
-    """基準の球の法線 n0 (n, 3) の所の、凹凸をつけた表面の位置と法線。
-    位置 p = (R0 + h) n0、法線は n0 − ∇_t h を正規化（h ≪ R0 なので球の曲率による補正は無視）"""
+    """Position and normal of the bumpy surface at the reference-sphere normals n0 (n, 3).
+    Position p = (R0 + h) n0; the normal is n0 − ∇_t h, normalized (h ≪ R0, so the correction for the curvature of
+    the sphere is ignored)"""
     n0 = n0 / np.linalg.norm(n0, axis=1, keepdims=True)
     q = R0 * n0
     g, dg = field(q)
@@ -178,7 +188,7 @@ def tangent_frame(n0):
     return t1, np.cross(n0, t1)
 
 
-# ---- メッシュ ----
+# ---- Mesh ----
 
 def icosphere(level):
     t = (1 + 5 ** 0.5) / 2
@@ -195,7 +205,7 @@ def icosphere(level):
         a, b = uk // len(v), uk % len(v)
         m = v[a] + v[b]
         m /= np.linalg.norm(m, axis=1, keepdims=True)
-        mid = (len(v) + inv).reshape(3, -1).T          # 各面の 3 辺の中点の番号
+        mid = (len(v) + inv).reshape(3, -1).T          # indices of the midpoints of the 3 edges of each face
         v = np.concatenate([v, m])
         i0, i1, i2 = f.T
         m01, m12, m20 = mid.T
@@ -222,7 +232,8 @@ def write_ply(path, P, N, F):
 
 
 def mesh_groups():
-    """材質ごとのメッシュ（区画の境目の頂点は複製するが、位置と法線は同じなので隙間はできない）"""
+    """Mesh per material (vertices on sector boundaries are duplicated, but their position and normal are the same,
+    so no gaps appear)"""
     groups = {}
     for k, (_, _, mat) in enumerate(SECTORS):
         groups.setdefault(mat, []).append(k)
@@ -233,15 +244,16 @@ def cmd_mesh(a):
     t0 = time.time()
     v, f = icosphere(ICO_LEVEL)
     P, N = surface(v)
-    print(f"{len(v)} 頂点, {len(f)} 三角形（{time.time() - t0:.0f} 秒）", flush=True)
+    print(f"{len(v)} vertices, {len(f)} triangles ({time.time() - t0:.0f} s)", flush=True)
     sec = sector_index(v[f].mean(1))
     (DATA / "mesh").mkdir(parents=True, exist_ok=True)
     for mat, ks in mesh_groups().items():
         Fm = f[np.isin(sec, ks)]
         write_ply(DATA / "mesh" / f"{mat}.ply", P, N, Fm)
-        print(f"  {mat}: 区画 {ks}, {len(Fm)} 三角形", flush=True)
+        print(f"  {mat}: sectors {ks}, {len(Fm)} triangles", flush=True)
 
-    # 検算 1: 区画の中央付近で、法線の傾き（1 軸あたり）の標準偏差が目標どおりか（解析的な法線）
+    # Check 1: near the middle of each sector, is the standard deviation of the normal tilt (per axis) as targeted
+    # (analytic normals)
     rng = np.random.default_rng(0)
     rows = {}
     for k, (name, sig, _) in enumerate(SECTORS):
@@ -254,15 +266,16 @@ def cmd_mesh(a):
         t1, t2 = tangent_frame(n0)
         cz = (n * n0).sum(1)
         sx, sy = (n * t1).sum(1) / cz, (n * t2).sum(1) / cz
-        ln = float(np.mean(cz))  # 広い範囲で平均した法線の長さ（≈ E[cos]）
+        ln = float(np.mean(cz))  # length of the normal averaged over a wide area (≈ E[cos])
         rows[name] = {"target_deg": sig, "slope_std_deg": [float(np.degrees(np.arctan(sx.std()))),
                                                            float(np.degrees(np.arctan(sy.std())))],
                       "mean_cos": ln, "sigma_from_length_deg": float(np.degrees(2 * math.sqrt(max(1 - ln, 0))))}
-        print(f"  {name}: 目標 {sig:.1f}°、傾きの標準偏差 {rows[name]['slope_std_deg'][0]:.2f}° / "
-              f"{rows[name]['slope_std_deg'][1]:.2f}°、E[cos] から換算したぼけ {rows[name]['sigma_from_length_deg']:.1f}°"
-              f"（目標の 2 倍 = {2 * sig:.0f}°）", flush=True)
+        print(f"  {name}: target {sig:.1f}°, standard deviation of the tilt {rows[name]['slope_std_deg'][0]:.2f}° / "
+              f"{rows[name]['slope_std_deg'][1]:.2f}°, blur converted from E[cos] {rows[name]['sigma_from_length_deg']:.1f}°"
+              f" (twice the target = {2 * sig:.0f}°)", flush=True)
 
-    # 検算 2: レンダラーが使う「頂点法線を三角形の中で補間したもの」と、解析的な法線の差
+    # Check 2: difference between "the vertex normals interpolated within triangles", which the renderer uses, and
+    # the analytic normals
     fi = rng.integers(0, len(f), 400000)
     fi = fi[np.isin(sec[fi], [k for k, (_, s, _) in enumerate(SECTORS) if s > 0])]
     b = rng.dirichlet([1, 1, 1], len(fi))
@@ -278,17 +291,17 @@ def cmd_mesh(a):
               "rms_tilt_analytic_deg": float(np.sqrt((tilt_a ** 2).mean())),
               "angle_interp_vs_analytic_median_deg": float(np.median(err)),
               "angle_interp_vs_analytic_p99_deg": float(np.percentile(err, 99))}
-    print(f"  補間した法線と解析的な法線: 傾きの RMS {interp['rms_tilt_interpolated_deg']:.2f}° / "
-          f"{interp['rms_tilt_analytic_deg']:.2f}°、向きの差 中央値 {interp['angle_interp_vs_analytic_median_deg']:.3f}°、"
-          f"99% 点 {interp['angle_interp_vs_analytic_p99_deg']:.3f}°", flush=True)
+    print(f"  interpolated vs analytic normals: RMS tilt {interp['rms_tilt_interpolated_deg']:.2f}° / "
+          f"{interp['rms_tilt_analytic_deg']:.2f}°, difference in direction: median {interp['angle_interp_vs_analytic_median_deg']:.3f}°, "
+          f"99th percentile {interp['angle_interp_vs_analytic_p99_deg']:.3f}°", flush=True)
     disp = np.abs(np.linalg.norm(P, axis=1) - R0)
     out = {"vertices": int(len(v)), "faces": int(len(f)), "sectors": rows, "interpolation": interp,
            "max_displacement_mm": float(disp.max() * 1000), "materials": MATERIALS}
     (DATA / "mesh" / "check.json").write_text(json.dumps(out, indent=1, ensure_ascii=False), encoding="utf-8")
-    print(f"変位の最大 {disp.max() * 1000:.2f} mm（{time.time() - t0:.0f} 秒）")
+    print(f"max displacement {disp.max() * 1000:.2f} mm ({time.time() - t0:.0f} s)")
 
 
-# ---- 視点とシーン ----
+# ---- Views and scenes ----
 
 def cam_from(elev_deg, azim_deg):
     e, az = math.radians(elev_deg), math.radians(azim_deg)
@@ -297,7 +310,7 @@ def cam_from(elev_deg, azim_deg):
 
 
 def c2w(frm):
-    """camera-to-world（OpenGL 流儀: カメラは -z を向き、y が画面上。make_views.py と同じ）"""
+    """camera-to-world (OpenGL convention: the camera looks along -z and y is up on screen. Same as make_views.py)"""
     z = np.subtract(frm, TARGET)
     z /= np.linalg.norm(z)
     x = np.cross([0.0, 1.0, 0.0], z)
@@ -342,7 +355,7 @@ def cmd_views(a):
         sc = DATA / "scenes" / f"{split}_{name}.json"
         sc.write_text(json.dumps(scene(frm, a.spp, k + 1, out), indent=1), encoding="utf-8")
         jobs.append((sc, Path(out)))
-    print(f"{len(jobs)} 視点のシーン -> {DATA / 'scenes'}")
+    print(f"{len(jobs)} view scenes -> {DATA / 'scenes'}")
     if not a.render:
         return
     todo = [j for j in jobs if not j[1].exists()][: a.limit]
@@ -357,16 +370,18 @@ def cmd_views(a):
             print(msg, flush=True)
             if r.returncode != 0 or not out.exists():
                 log.write(r.stdout.decode("utf-8", "replace")[-2000:] + "\n" + r.stderr.decode("utf-8", "replace")[-2000:] + "\n")
-                raise SystemExit(f"描画に失敗: {sc}")
-    print(f"{len(todo)} 視点を {(time.time() - t0) / 60:.1f} 分で描画")
+                raise SystemExit(f"rendering failed: {sc}")
+    print(f"{len(todo)} views rendered in {(time.time() - t0) / 60:.1f} min")
 
 
-BG_DISPLAY = 0.396        # post で背景に置く一様な色（表示値。像のデータと同じ）
+BG_DISPLAY = 0.396        # uniform colour placed in the background by post (display value. Same as the statue data)
 
 
 def cmd_post(a):
-    """512 px の放射輝度を平均して各画素の大きさにし、背景を一様な色に置き換えて表示値の PNG にする。
-    背景は放射輝度で混ぜる（球の縁の画素は、もとの画素に入っていた環境マップの分が少し残る）"""
+    """Average the 512 px radiance down to each pixel size, replace the background with a uniform colour, and write
+    PNGs in display values.
+    The background is blended in radiance (edge pixels of the sphere keep a little of the environment map that was
+    in the original pixels)"""
     import imageio.v2 as imageio
     import torch
     import torch.nn.functional as F

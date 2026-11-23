@@ -1,212 +1,244 @@
-# 動くシーン: 3 つの表現を、正解の動きと突き合わせる
+# Dynamic scenes: three representations against the true motion
 
-動くシーンの表現を 3 通り実装し、動きの式が分かっているおもちゃデータ（`make_toy_dynamic.py`）で比べた。
+Three dynamic-scene representations were implemented and compared on toy data whose motion is known in
+closed form (`make_toy_dynamic.py`).
 
-| | 表現 | 実装 |
+| | Representation | Implementation |
 |---|---|---|
-| 変形場 | 基準の形 1 組を、MLP が時刻ごとにずらす（Deformable 3D Gaussians の簡略版） | `gs/deform.py` |
-| 時刻つき | 各ガウシアンが時刻 μ_t・時間幅 σ_t・速度 v を持ち、その前後でだけ現れてまっすぐ動く（Spacetime Gaussians の簡略版） | `gs/spacetime.py`（`train_dynamic.py --spacetime`） |
-| 位置を追う | 数・色・不透明度・大きさは固定で、位置だけを時刻の節点ごとに持つ（Dynamic 3D Gaussians の簡略版）。[下の追加](#追加-時刻ごとの位置を追う表現)で扱う | `gs/trajectory.py`（`train_dynamic.py --trajectory`） |
+| Deformation field | One canonical set of Gaussians, shifted per time step by an MLP (simplified Deformable 3D Gaussians) | `gs/deform.py` |
+| Spacetime | Each Gaussian has a time μ_t, temporal width σ_t, and velocity v. It appears only around that time and moves in a straight line (simplified Spacetime Gaussians) | `gs/spacetime.py` (`train_dynamic.py --spacetime`) |
+| Trajectory | Count, colour, opacity, and size are fixed. Only the position is stored per time knot (simplified Dynamic 3D Gaussians). Covered in the [addition below](#addition-the-trajectory-representation) | `gs/trajectory.py` (`train_dynamic.py --trajectory`) |
 
-## 評価の方法（`motion_eval.py`）
+## Evaluation (`motion_eval.py`)
 
-物体に付いた点の正解の移動 Φ（球は中心と半径の変化、立方体は平行移動）が分かるので、面の近くにある
-ガウシアンの Δ だけ後の位置を Φ と比べる。
+The true displacement Φ of a point attached to an object is known (for the sphere, the change of centre and
+radius; for the cube, a translation). For Gaussians near a surface, the position after Δ is compared with Φ.
 
-- **ratio** = 動きの誤差 / 正解の移動量（不透明度で重みづけた平均の比）。0 なら正解どおり、1 なら動かさないのと同じ
-- **法線 / 接線**: 誤差と移動量を、面の法線方向と接線方向に分けた ratio
-- **alive**: 時刻 t にあった不透明度のうち、Δ 後にも残っている割合（変形場は常に 1）
-- **cover**: 正解の面の上の点から、いちばん近いガウシアンまでの平均距離。物体が消えていると大きい
+- **ratio** = motion error / true displacement (ratio of opacity-weighted means). 0 means exactly right, 1 means the same as not moving
+- **normal / tangential**: the ratio with error and displacement split into the surface normal and tangential directions
+- **alive**: the fraction of the opacity present at time t that still remains after Δ (always 1 for the deformation field)
+- **cover**: mean distance from points on the true surface to the nearest Gaussian. Large when the object has disappeared
 
 ```bash
 .venv/Scripts/python experiments/dynamic/motion_eval.py --ckpts logs/dyn_toy/ckpt_007000.pt logs/dyn_toy_st/ckpt_007000.pt logs/dyn_toy_static/ckpt_007000.pt
 .venv/Scripts/python experiments/dynamic/motion_eval.py --orbit --ckpts logs/dyn_orbit/ckpt_005000.pt logs/dyn_orbit_st/ckpt_005000.pt logs/dyn_orbit_static/ckpt_005000.pt
 ```
 
-## 結果
+## Results
 
-学習の設定は README の「動くシーン」と同じ（256 px、学習 100 枚で 1 時刻 1 視点、テストは学習に無い時刻の 20 枚）。
-数値は `motion_toy.json` / `motion_orbit.json`。ratio は Δ=0.1（全体の 1/10 の時間）のもの。各 1 回の学習（seed 0）。
+Training settings are the same as in the "dynamic" section of the top-level README (256 px, 100 training
+frames with one view per time step, 20 test frames at times not in the training set).
+Numbers are in `motion_toy.json` / `motion_orbit.json`. The ratio is for Δ=0.1 (one tenth of the whole duration).
+One training run each (seed 0).
 
-**注意: このページの数値はすべて、正解画像の輪郭がギザギザだった頃のデータで測った**
-（`make_toy_dynamic.py --supersample 1`。今の既定は 4）。PSNR の絶対値は低く出ている。
-末尾の「追加: 正解画像のアンチエイリアス」を参照。
+**Note: every number on this page was measured on data whose ground-truth images had aliased edges**
+(`make_toy_dynamic.py --supersample 1`; the default is now 4). Absolute PSNR values come out low.
+See "Addition: antialiased ground-truth images" at the end.
 
-### 小さく動くデータ（球が弾んで脈打ち、立方体が ±15° 往復。7000 iter）
+### Small motion (the sphere bounces and pulses, the cube swings ±15°; 7000 iterations)
 
-| | test PSNR | ガウシアン | 球 ratio（法線 / 接線） | 立方体 ratio（法線 / 接線） | alive |
+| | test PSNR | Gaussians | Sphere ratio (normal / tangential) | Cube ratio (normal / tangential) | alive |
 |---|---|---|---|---|---|
-| 変形場 | **25.7 dB** | 39,946 | 0.46（0.18 / 0.74） | 0.13（0.27 / 0.13） | 1.00 |
-| 時刻つき | 23.7 dB | 243,811 | 0.78（0.49 / 1.08） | 0.63（1.03 / 0.64） | 0.24 |
-| 変形なし | 14.1 dB | 29,332 | 1.00 | 1.00 | 1.00 |
+| Deformation field | **25.7 dB** | 39,946 | 0.46 (0.18 / 0.74) | 0.13 (0.27 / 0.13) | 1.00 |
+| Spacetime | 23.7 dB | 243,811 | 0.78 (0.49 / 1.08) | 0.63 (1.03 / 0.64) | 0.24 |
+| Static | 14.1 dB | 29,332 | 1.00 | 1.00 | 1.00 |
 
-### 大きく動くデータ（`--orbit`、立方体が球のまわりを半周。5000 iter）
+### Large motion (`--orbit`, the cube travels half a circle around the sphere; 5000 iterations)
 
-| | test PSNR | ガウシアン | 球 ratio（法線 / 接線） | 立方体 ratio（法線 / 接線） | 立方体 cover |
+| | test PSNR | Gaussians | Sphere ratio (normal / tangential) | Cube ratio (normal / tangential) | Cube cover |
 |---|---|---|---|---|---|
-| 変形場（warm-up 1000） | 15.1 dB | 25,802 | 0.50（0.25 / 0.74） | 1.04（1.25 / 1.06） | 0.464 |
-| 時刻つき | **23.0 dB** | 129,856 | 0.81（0.52 / 1.11） | 0.26（0.41 / 0.26） | 0.046 |
-| 変形なし | 11.8 dB | 19,599 | 1.00 | 1.00 | 0.387 |
+| Deformation field (warm-up 1000) | 15.1 dB | 25,802 | 0.50 (0.25 / 0.74) | 1.04 (1.25 / 1.06) | 0.464 |
+| Spacetime | **23.0 dB** | 129,856 | 0.81 (0.52 / 1.11) | 0.26 (0.41 / 0.26) | 0.046 |
+| Static | 11.8 dB | 19,599 | 1.00 | 1.00 | 0.387 |
 
-## 分かったこと
+## Findings
 
-1. **得意・不得意が逆になる。** 小さく動くデータでは変形場が 2 dB 上、大きく動くデータでは時刻つきが 8 dB 上。
-   変形場は `--orbit` で立方体を失う（cover 0.46 は変形なしより悪い）。時刻つきは基準の形が要らないので、
-   どちらのデータでも 23 dB 台で、立方体の位置も合う（cover 0.05）。
-2. **変形場でも、球の接線方向の動きは 7 割がた間違っている。** 法線方向の ratio は 0.18 だが接線方向は 0.74。
-   一様な色の縞の中では、ガウシアンが面の上を滑っても画像は変わらないので、画像からは決まらない
-   （開口問題）。PSNR 25.7 dB からは見えない崩れ。縁と角で動きが決まる立方体では 0.13 まで合う。
-3. **時刻つきのガウシアンは、動きをほとんど学んでいない。** 時間幅 σ_t の中央値は 0.022（学習フレームの間隔 0.01 の
-   約 2 枚ぶん）まで自分で縮み、Δ=0.1 後には不透明度の 1/4 しか残らない。1 つのガウシアンを見るフレームが
-   数枚しかないので、「物体と一緒に動く」より「その数枚に合う場所に現れて消える」方が先に学ばれる。
-   球の ratio は 0.78 で、動かさないのに近い。学習画像の PSNR は 32 dB、テストは 23.7 dB で、
-   学習した視点への過適合がはっきり出ている。数も変形場の 6 倍に増える。
-4. ただし大きく動く立方体だけは、時刻つきでも ratio 0.26 まで合う。フレーム間の移動（約 0.05）が
-   立方体の大きさ（0.6）に対して無視できず、速度を合わせないと数枚のフレームにも合わないため、と考えられる。
+1. **Strengths are opposite.** On small motion the deformation field is 2 dB ahead; on large motion spacetime
+   is 8 dB ahead. The deformation field loses the cube on `--orbit` (cover 0.46 is worse than static).
+   Spacetime needs no canonical shape, so it stays around 23 dB on both datasets and places the cube
+   correctly (cover 0.05).
+2. **Even with the deformation field, about 70% of the tangential motion on the sphere is wrong.** The ratio is
+   0.18 in the normal direction but 0.74 in the tangential direction. Inside a uniformly coloured stripe,
+   a Gaussian sliding along the surface does not change the image, so the image does not determine the motion
+   (the aperture problem). This failure is invisible in the 25.7 dB PSNR. On the cube, where edges and
+   corners determine the motion, the ratio goes down to 0.13.
+3. **Spacetime Gaussians barely learn motion.** The median temporal width σ_t shrinks by itself to 0.022
+   (about two frames at the training frame interval of 0.01), and only a quarter of the opacity remains
+   after Δ=0.1. Only a few frames see each Gaussian, so "appear and disappear where those few frames need it"
+   is learned before "move with the object". The sphere ratio is 0.78, close to not moving. Training PSNR
+   is 32 dB and test PSNR is 23.7 dB, a clear overfit to the training views. The count also grows to
+   6 times that of the deformation field.
+4. The cube in the large-motion data is the exception: spacetime reaches a ratio of 0.26 there. The likely
+   reason is that the displacement between frames (about 0.05) is not negligible against the cube size (0.6),
+   so even a few frames cannot be fitted without the right velocity.
 
-## 追加: 時間幅の下限と、速度の正則化
+## Addition: a lower bound on the temporal width, and velocity regularization
 
-上の崩れ（時刻つきの過適合、変形場の接線方向の滑り）に、2 つの対処を試した。小さく動くデータ、7000 iter。
+Two remedies were tried for the failures above (spacetime overfitting, tangential sliding in the deformation
+field). Small-motion data, 7000 iterations.
 
-- **時間幅の下限**（`--min-t-scale`、時刻つきだけ）: σ_t = 下限 + exp(·) として、それより短くならないようにする
-- **速度の正則化**（`--lambda-smooth`、どちらの表現でも）: 近くのガウシアン（近傍 8 個）と速度をそろえる。
-  損失は 速度の差の 2 乗 / 距離の 2 乗 の平均（速度場の勾配の 2 乗。オプティカルフローの Horn–Schunck の
-  滑らかさの項と同じ考え）。距離を保つ ARAP は、半径が脈打つこの球では正解の動きまで罰するので使わなかった
+- **Lower bound on the temporal width** (`--min-t-scale`, spacetime only): σ_t = bound + exp(·), so it cannot get shorter than the bound
+- **Velocity regularization** (`--lambda-smooth`, either representation): align the velocity with nearby
+  Gaussians (8 neighbours). The loss is the mean of squared velocity difference / squared distance
+  (the squared gradient of the velocity field; the same idea as the smoothness term of Horn–Schunck optical flow).
+  ARAP, which preserves distances, was not used: on this sphere, whose radius pulses, it would penalize the true motion
 
-| | test PSNR | ガウシアン | 球 ratio（法線 / 接線） | 立方体 ratio（法線 / 接線） | σ_t 中央値 |
+| | test PSNR | Gaussians | Sphere ratio (normal / tangential) | Cube ratio (normal / tangential) | Median σ_t |
 |---|---|---|---|---|---|
-| 変形場 | 25.7 dB | 39,946 | 0.46（0.18 / 0.74） | 0.13（0.27 / 0.13） | |
-| 変形場 + 正則化 1e-4 | **26.3 dB** | 33,296 | 0.38（0.15 / 0.61） | 0.09（0.14 / 0.09） | |
-| 変形場 + 正則化 1e-3 | 25.2 dB | 34,489 | **0.34**（0.20 / 0.49） | **0.08**（0.13 / 0.08） | |
-| 時刻つき | 23.7 dB | 243,811 | 0.78（0.49 / 1.08） | 0.63（1.03 / 0.64） | 0.022 |
-| 時刻つき + 下限 0.05 | 23.9 dB | 139,788 | 0.73（0.49 / 1.00） | 0.59（0.84 / 0.63） | 0.055 |
-| 時刻つき + 下限 0.1 | 22.7 dB | 96,135 | 0.90（0.76 / 1.07） | 0.66（0.85 / 0.69） | 0.104 |
-| 時刻つき + 下限 0.05 + 正則化 1e-3 | 21.8 dB | 123,663 | 0.90（0.94 / 0.90） | 0.95（1.02 / 0.95） | 0.053 |
+| Deformation field | 25.7 dB | 39,946 | 0.46 (0.18 / 0.74) | 0.13 (0.27 / 0.13) | |
+| Deformation field + regularization 1e-4 | **26.3 dB** | 33,296 | 0.38 (0.15 / 0.61) | 0.09 (0.14 / 0.09) | |
+| Deformation field + regularization 1e-3 | 25.2 dB | 34,489 | **0.34** (0.20 / 0.49) | **0.08** (0.13 / 0.08) | |
+| Spacetime | 23.7 dB | 243,811 | 0.78 (0.49 / 1.08) | 0.63 (1.03 / 0.64) | 0.022 |
+| Spacetime + bound 0.05 | 23.9 dB | 139,788 | 0.73 (0.49 / 1.00) | 0.59 (0.84 / 0.63) | 0.055 |
+| Spacetime + bound 0.1 | 22.7 dB | 96,135 | 0.90 (0.76 / 1.07) | 0.66 (0.85 / 0.69) | 0.104 |
+| Spacetime + bound 0.05 + regularization 1e-3 | 21.8 dB | 123,663 | 0.90 (0.94 / 0.90) | 0.95 (1.02 / 0.95) | 0.053 |
 
-5. **速度の正則化は変形場に効く。** 球の接線方向の ratio は 0.74 → 0.61 → 0.49 と、重みを上げるほど下がる。
-   重み 1e-4 では PSNR も 0.5 dB 上がる。1e-3 では動きはさらに合うが、PSNR は 0.5 dB 下がり、法線方向が少し悪くなる
-   （滑らかにしすぎ）。それでも接線方向の誤差は正解の移動量の半分残っている。
-6. **時間幅の下限だけでは、時刻つきは動きを学ばない。** 寿命は下限に張りつき（中央値 0.055）、数は 4 割減るが、
-   ratio は 0.78 → 0.73 でほぼ同じ。下限 0.1 では、まっすぐな動きで弾む球を表せなくなって PSNR も ratio も悪くなる。
-7. **時刻つきに速度の正則化を足すと、かえって悪くなる。** 速さの中央値が 2.1 → 0.5 に下がった。もともと物体を
-   追っていないガウシアンにとって、「近くと速度をそろえる」いちばん安い方法は全員が止まることなので、
-   動かないガウシアンが現れて消えるだけになる（ratio 0.9、PSNR 21.8 dB）。
-   速度をそろえる前に、同じガウシアンが物体の同じ点を追い続ける仕組み（数と色を固定して時刻ごとに位置を
-   追う Dynamic 3D Gaussians のやり方や、2D の追跡結果を使う損失）が要る。
+5. **Velocity regularization works for the deformation field.** The tangential ratio on the sphere goes
+   0.74 → 0.61 → 0.49 as the weight increases. At weight 1e-4, PSNR also rises by 0.5 dB. At 1e-3 the motion
+   fits better still, but PSNR drops by 0.5 dB and the normal direction gets slightly worse (over-smoothing).
+   Even so, half of the true displacement remains as tangential error.
+6. **A lower bound on the temporal width alone does not make spacetime learn motion.** Lifetimes stick to the
+   bound (median 0.055) and the count drops by 40%, but the ratio is nearly unchanged (0.78 → 0.73).
+   With a bound of 0.1, straight-line motion can no longer represent the bouncing sphere, and both PSNR
+   and ratio get worse.
+7. **Adding velocity regularization to spacetime makes it worse.** The median speed fell from 2.1 to 0.5.
+   For Gaussians that were not following the object in the first place, the cheapest way to "agree with
+   the neighbours" is for everyone to stop, so the result is motionless Gaussians that appear and disappear
+   (ratio 0.9, PSNR 21.8 dB). Before aligning velocities, something has to make the same Gaussian keep
+   following the same point on the object (fixing count and colour and tracking the position per time step
+   as in Dynamic 3D Gaussians, or a loss that uses 2D tracking results).
 
-## 追加: 時刻ごとの位置を追う表現
+## Addition: the trajectory representation
 
-7. を受けて、同じガウシアンが同じ点を追い続ける表現（`--trajectory`）を足した。
+Following finding 7, a representation in which the same Gaussian keeps following the same point (`--trajectory`) was added.
 
-- **表現**: 各ガウシアンが、時刻の節点 21 個ぶんの位置のずれを持つ。節点の間は線形に補間する。
-  数・色・不透明度・大きさ・向きは時刻によらない
-- **学習の順序**（この節の実験。`--knots-init 3`）: 時間の順に進める。はじめは最初の 3 節点までのフレームだけを使い、1000 iter から 150 iter ごとに
-  次の節点を使い始める。新しい節点は直前の 2 節点から外挿した位置で初期化する。全時刻を最初から同時に
-  学習すると、まだ合っていない時刻のガウシアンを物体へ引き寄せる勾配が無いため
-- 元の論文は 27 台の同時撮影と剛体性の正則化を使う。ここは 1 時刻 1 視点で、正則化は上の速度の正則化だけ
+- **Representation**: each Gaussian has a position offset for each of 21 time knots, with linear interpolation
+  between knots. Count, colour, opacity, size, and orientation do not depend on time
+- **Training order** (the experiments in this section; `--knots-init 3`): go in time order. Start with only
+  the frames up to the first 3 knots, then from iteration 1000 start using the next knot every 150 iterations.
+  A new knot is initialized at the position extrapolated from the previous two. The reason is that when all
+  times are trained together from the start, there is no gradient pulling the Gaussians of a not-yet-fitted
+  time towards the object
+- The original paper uses 27 synchronized cameras and rigidity regularization. Here there is one view per
+  time step, and the only regularization is the velocity regularization above
 
-### 小さく動くデータ（7000 iter）
+### Small motion (7000 iterations)
 
-| | test PSNR | ガウシアン | 球 ratio（法線 / 接線） | 立方体 ratio（法線 / 接線） |
+| | test PSNR | Gaussians | Sphere ratio (normal / tangential) | Cube ratio (normal / tangential) |
 |---|---|---|---|---|
-| 位置を追う | 13.2 dB | 75,975 | 3.51（2.79 / 4.61） | 2.66（4.45 / 2.63） |
-| 位置を追う + 正則化 1e-4 | 19.3 dB | 54,058 | 0.79（0.42 / 1.18） | 0.57（0.75 / 0.65） |
-| 位置を追う + 正則化 1e-3 | 18.8 dB | 54,063 | 0.85（0.51 / 1.18） | 0.65（1.03 / 0.67） |
-| 位置を追う + 正則化 1e-4、節点 11 個 | 17.0 dB | 64,667 | 0.72（0.47 / 1.03） | 0.48（0.86 / 0.45） |
-| （再掲）変形場 | **25.7 dB** | 39,946 | 0.46（0.18 / 0.74） | 0.13（0.27 / 0.13） |
-| （再掲）変形なし | 14.1 dB | 29,332 | 1.00 | 1.00 |
+| Trajectory | 13.2 dB | 75,975 | 3.51 (2.79 / 4.61) | 2.66 (4.45 / 2.63) |
+| Trajectory + regularization 1e-4 | 19.3 dB | 54,058 | 0.79 (0.42 / 1.18) | 0.57 (0.75 / 0.65) |
+| Trajectory + regularization 1e-3 | 18.8 dB | 54,063 | 0.85 (0.51 / 1.18) | 0.65 (1.03 / 0.67) |
+| Trajectory + regularization 1e-4, 11 knots | 17.0 dB | 64,667 | 0.72 (0.47 / 1.03) | 0.48 (0.86 / 0.45) |
+| (repeated) Deformation field | **25.7 dB** | 39,946 | 0.46 (0.18 / 0.74) | 0.13 (0.27 / 0.13) |
+| (repeated) Static | 14.1 dB | 29,332 | 1.00 | 1.00 |
 
-### 大きく動くデータ（`--orbit`）
+### Large motion (`--orbit`)
 
-| | iter | test PSNR | ガウシアン | 球 ratio（法線 / 接線） | 立方体 ratio（法線 / 接線） | 立方体 cover |
+| | iter | test PSNR | Gaussians | Sphere ratio (normal / tangential) | Cube ratio (normal / tangential) | Cube cover |
 |---|---|---|---|---|---|---|
-| 位置を追う | 5000 | 9.1 dB | 65,150 | 3.72（2.70 / 5.22） | 1.49（1.87 / 1.45） | 0.129 |
-| 位置を追う + 正則化 1e-4 | 5000 | 9.6 dB | 51,951 | 1.07（0.87 / 1.40） | 0.51（0.52 / 0.55） | 0.103 |
-| 位置を追う + 正則化 1e-4 | 7000 | 17.6 dB | 51,930 | 0.81（0.49 / 1.13） | 0.39（0.68 / 0.35） | 0.054 |
-| （再掲）変形場 | 5000 | 15.1 dB | 25,802 | 0.50（0.25 / 0.74） | 1.04（1.25 / 1.06） | 0.464 |
-| （再掲）時刻つき | 5000 | **23.0 dB** | 129,856 | 0.81（0.52 / 1.11） | 0.26（0.41 / 0.26） | 0.046 |
+| Trajectory | 5000 | 9.1 dB | 65,150 | 3.72 (2.70 / 5.22) | 1.49 (1.87 / 1.45) | 0.129 |
+| Trajectory + regularization 1e-4 | 5000 | 9.6 dB | 51,951 | 1.07 (0.87 / 1.40) | 0.51 (0.52 / 0.55) | 0.103 |
+| Trajectory + regularization 1e-4 | 7000 | 17.6 dB | 51,930 | 0.81 (0.49 / 1.13) | 0.39 (0.68 / 0.35) | 0.054 |
+| (repeated) Deformation field | 5000 | 15.1 dB | 25,802 | 0.50 (0.25 / 0.74) | 1.04 (1.25 / 1.06) | 0.464 |
+| (repeated) Spacetime | 5000 | **23.0 dB** | 129,856 | 0.81 (0.52 / 1.11) | 0.26 (0.41 / 0.26) | 0.046 |
 
-7000 iter の行は、数の増減を 5000 iter まで続けた設定（小さく動くデータと同じ）。再掲の 2 行は 5000 iter のままなので、
-学習の長さがそろっていない。
+The 7000-iteration row continues densification until iteration 5000 (as for the small-motion data).
+The two repeated rows are still at 5000 iterations, so training lengths do not match.
 
-8. **正則化なしでは崩れる。** テストの PSNR は変形なしより低く、ratio は 3 前後（正解の数倍の距離をでたらめに動く）。
-   学習画像の PSNR は 24 dB 台まで上がるので、学習した視点への過適合。位置を節点ごとに自由に動かせるのに、
-   1 つの節点にかかるフレームは 10 枚ほどしか無い。
-9. **速度の正則化は、この表現には効く。** PSNR は 13.2 → 19.3 dB、球の ratio は 3.51 → 0.79。時刻つきでは逆効果だった
-   同じ損失が、追い続ける表現では働く（7. の見立てどおり）。ただし重みを 10 倍にしても良くならず、変形場
-   （25.7 dB、0.46）には届かない。球の接線方向は 1.18 で、動かさないより悪い。
-10. **大きな動きでも立方体を見失わない。** `--orbit` で立方体の cover は 0.054（変形場 0.464、時刻つき 0.046）、
-    ratio は 0.39。PSNR 17.6 dB は変形場の 15.1 dB より上だが、時刻つきの 23.0 dB には届かない。
-11. **時間の順に学習するあいだに増えたガウシアンは、あとで掃除しないと残る。** 5000 iter の設定では数の増減が
-    2400 iter で止まり、その時点では全体の 6 割の時刻しか学習に入っていない。3000 iter の不透明度リセットも
-    かからず、テストは 9.6 dB のまま。増減を 5000 iter まで続けると、リセットで 73,558 → 3 万個前後に減った直後に
-    検証の PSNR が 10 → 16 dB に上がる。小さく動くデータでも同じ跳ね方をする。
-12. 節点を 11 個に減らすと、動きは少し合うが PSNR は 2.3 dB 下がる。8. の「節点あたりのフレームが少ない」だけでは
-    説明がつかず、原因は切り分けられていない（→ 下の 13. で、時間の順に学習する手順が原因と分かった）。
+8. **Without regularization it collapses.** Test PSNR is lower than static, and the ratio is around 3
+   (moving several times the true distance at random). Training PSNR rises to about 24 dB, so this is
+   overfitting to the training views. Positions can move freely at each knot, yet only about 10 frames
+   constrain each knot.
+9. **Velocity regularization works for this representation.** PSNR goes 13.2 → 19.3 dB and the sphere ratio
+   3.51 → 0.79. The same loss that backfired for spacetime works for a representation that keeps tracking
+   (as finding 7 predicted). But a 10× larger weight does not help, and it does not reach the deformation
+   field (25.7 dB, 0.46). The tangential ratio on the sphere is 1.18, worse than not moving.
+10. **It does not lose the cube even under large motion.** On `--orbit` the cube cover is 0.054 (deformation
+    field 0.464, spacetime 0.046) and the ratio is 0.39. PSNR 17.6 dB is above the deformation field's
+    15.1 dB but below spacetime's 23.0 dB.
+11. **Gaussians added while training in time order stay unless cleaned up later.** With the 5000-iteration
+    setting, densification stops at iteration 2400, when only 60% of the times have entered training.
+    The opacity reset at iteration 3000 does not apply either, and the test PSNR stays at 9.6 dB. When
+    densification continues until iteration 5000, the validation PSNR jumps from 10 to 16 dB right after
+    a reset cuts the count from 73,558 to around 30,000. The small-motion data shows the same jump.
+12. Reducing the knots to 11 fits the motion slightly better but lowers PSNR by 2.3 dB. "Few frames per knot"
+    (finding 8) alone does not explain this, and the cause was not isolated (→ finding 13 below shows that
+    the time-ordered procedure was the cause).
 
-## 追加: 誤りのない 2D 追跡と、時間の順に学習する手順の見直し
+## Addition: error-free 2D tracking, and revisiting time-ordered training
 
-実際の単眼の手法は、学習済みの点追跡モデルの出力を損失に入れる。おもちゃデータは動きの式が分かるので、
-追跡が完全に正しい場合の上限を測れる（`--lambda-track`）。時刻 t に面の近くにあってカメラから見える側の
-ガウシアンについて、時刻の差 0.1 以内の別のフレームでの位置をそのフレームの画面に投影し、正解の移動先の
-投影と比べる（画面上の位置だけ。視線方向のずれは罰しない）。重みは 1（画像の損失と勾配の大きさが同じ程度）。
+Real monocular methods add the output of a pretrained point tracker to the loss. Since the toy motion is
+known in closed form, the upper bound for perfectly correct tracking can be measured (`--lambda-track`).
+For Gaussians that are near a surface at time t and on the side visible from the camera, their position in
+another frame within a time difference of 0.1 is projected onto that frame's image and compared with the
+projection of the true destination (image-plane position only; displacement along the view direction is
+not penalized). The weight is 1 (gradients of about the same size as the image loss).
 
-小さく動くデータ、7000 iter。「浮遊」は、不透明度のうち正解の面から 0.1 以上離れた所にある割合。
+Small-motion data, 7000 iterations. "Floating" is the fraction of opacity located 0.1 or more away from the true surface.
 
-| | test PSNR | ガウシアン | 球 ratio（法線 / 接線） | 立方体 ratio（法線 / 接線） | 浮遊 |
+| | test PSNR | Gaussians | Sphere ratio (normal / tangential) | Cube ratio (normal / tangential) | Floating |
 |---|---|---|---|---|---|
-| 変形場 | 25.7 dB | 39,946 | 0.46（0.18 / 0.74） | 0.13（0.27 / 0.13） | 0.14 |
-| 変形場 + 追跡 | 25.9 dB | 49,660 | 0.33（0.14 / 0.51） | 0.08（0.18 / 0.08） | 0.12 |
-| 位置を追う（時間の順）+ 追跡 | 12.1 dB | 77,082 | 2.83（2.08 / 3.84） | 2.02（3.87 / 1.96） | 0.89 |
-| 位置を追う（時間の順）+ 正則化 1e-4 | 19.3 dB | 54,058 | 0.79（0.42 / 1.18） | 0.57（0.75 / 0.65） | 0.61 |
-| 位置を追う（最初から全時刻）+ 正則化 1e-4 | 24.3 dB | 65,924 | 0.49（0.28 / 0.70） | 0.36（0.54 / 0.38） | 0.41 |
-| 位置を追う（最初から全時刻）+ 正則化 1e-4 + 追跡 | 24.3 dB | 64,543 | 0.45（0.26 / 0.67） | 0.36（0.57 / 0.38） | |
+| Deformation field | 25.7 dB | 39,946 | 0.46 (0.18 / 0.74) | 0.13 (0.27 / 0.13) | 0.14 |
+| Deformation field + tracking | 25.9 dB | 49,660 | 0.33 (0.14 / 0.51) | 0.08 (0.18 / 0.08) | 0.12 |
+| Trajectory (time order) + tracking | 12.1 dB | 77,082 | 2.83 (2.08 / 3.84) | 2.02 (3.87 / 1.96) | 0.89 |
+| Trajectory (time order) + regularization 1e-4 | 19.3 dB | 54,058 | 0.79 (0.42 / 1.18) | 0.57 (0.75 / 0.65) | 0.61 |
+| Trajectory (all times from the start) + regularization 1e-4 | 24.3 dB | 65,924 | 0.49 (0.28 / 0.70) | 0.36 (0.54 / 0.38) | 0.41 |
+| Trajectory (all times from the start) + regularization 1e-4 + tracking | 24.3 dB | 64,543 | 0.45 (0.26 / 0.67) | 0.36 (0.57 / 0.38) | |
 
-大きく動くデータ（`--orbit`、7000 iter、正則化 1e-4）:
+Large-motion data (`--orbit`, 7000 iterations, regularization 1e-4):
 
-| | test PSNR | ガウシアン | 球 ratio | 立方体 ratio | 立方体 cover |
+| | test PSNR | Gaussians | Sphere ratio | Cube ratio | Cube cover |
 |---|---|---|---|---|---|
-| 位置を追う（時間の順） | 17.6 dB | 51,930 | 0.81 | 0.39 | 0.054 |
-| 位置を追う（最初から全時刻） | 20.4 dB | 57,743 | 0.49 | 0.72 | 0.106 |
+| Trajectory (time order) | 17.6 dB | 51,930 | 0.81 | 0.39 | 0.054 |
+| Trajectory (all times from the start) | 20.4 dB | 57,743 | 0.49 | 0.72 | 0.106 |
 
-13. **位置を追う表現が悪かった主な原因は、時間の順に学習する手順だった。** 時間の順では、不透明度の 6〜9 割が
-    正解の面から離れた所にある（変形場は 0.14）。はじめの 3 節点ぶん（11 枚ほどの視点）だけで形を作って数を
-    増やすので、その視点にだけ合う浮遊物ができ、時刻ごとに並べ替えて絵を合わせている。最初から全時刻を使うと
-    PSNR は 19.3 → 24.3 dB、球の ratio は 0.79 → 0.49 で、変形場（25.7 dB、0.46）に近づく。元の論文が時間の順に
-    進められるのは、各時刻に 27 視点あるから。浮遊はまだ 0.41 あり、立方体の ratio（0.36）は変形場（0.13）に届かない。
-14. **時間の順に学習する利点は、大きく動く物体の追跡にだけ残る。** `--orbit` では、最初から全時刻のほうが
-    PSNR は高い（20.4 対 17.6 dB）が、立方体の ratio は 0.72 で、ほとんど追えていない（時間の順は 0.39）。
-    `train_dynamic.py` の既定は最初から全時刻に変えた。
-15. **誤りのない 2D 追跡を入れても、滑りは消えない。** 変形場で球の接線方向は 0.74 → 0.51。速度の正則化 1e-3
-    （0.49）と同じ程度で、PSNR はほぼ変わらない。位置を追う表現では、時間の順だと効かず（面の近くに無い
-    ガウシアンには掛からない）、最初から全時刻でも 0.49 → 0.45 にとどまる。重み 1 の 1 通りしか試していないので、
-    重みが足りないのか、ガウシアンごとに掛ける損失の作りが弱いのか（実際の手法は画素ごとに描いた位置で比べる）は
-    切り分けていない。
+13. **The main reason the trajectory representation did badly was the time-ordered training procedure.**
+    In time order, 60–90% of the opacity sits away from the true surface (0.14 for the deformation field).
+    The shape is built and densified from the first 3 knots only (about 11 views), which produces floaters
+    that fit just those views, and the picture is matched by rearranging them per time step. Using all
+    times from the start gives PSNR 19.3 → 24.3 dB and sphere ratio 0.79 → 0.49, close to the deformation
+    field (25.7 dB, 0.46). The original paper can go in time order because it has 27 views at each time.
+    Floating is still 0.41, and the cube ratio (0.36) does not reach the deformation field (0.13).
+14. **The advantage of time-ordered training remains only for tracking an object that moves a lot.**
+    On `--orbit`, using all times from the start gives higher PSNR (20.4 vs 17.6 dB), but the cube ratio is
+    0.72, so the cube is hardly tracked (0.39 in time order). The default of `train_dynamic.py` was changed
+    to all times from the start.
+15. **Even error-free 2D tracking does not remove the sliding.** With the deformation field, the tangential
+    ratio on the sphere goes 0.74 → 0.51. That is about the same as velocity regularization 1e-3 (0.49),
+    and PSNR hardly changes. For the trajectory representation it does not work in time order (it does not
+    apply to Gaussians that are not near a surface), and with all times from the start it only goes
+    0.49 → 0.45. Only one weight (1) was tried, so it is not known whether the weight is too small or the
+    per-Gaussian form of the loss is weak (real methods compare positions rendered per pixel).
 
-学習の所要時間は並列に回したので比べられない（1 本ずつなら時刻つきで 30 分前後、位置を追うもので 36 分）。
+Training times cannot be compared because the runs were executed in parallel (run one at a time, spacetime
+takes about 30 minutes and trajectory 36 minutes).
 
-## 追加: 正解画像のアンチエイリアス
+## Addition: antialiased ground-truth images
 
-ここまでのデータは 1 画素を 1 本のレイで描いていて、輪郭と模様の境目が階段状だった（見落とし）。
-ガウシアンのラスタライザはぼかしを入れるので、階段状の境目は再現できない。
-1 画素を 4×4 本で描いて平均したデータ（`--supersample 4`）で、変形場だけ学習し直した（小さく動くデータ、7000 iter、seed 0）。
+The data up to this point was rendered with one ray per pixel, so object edges and pattern boundaries were
+staircase-shaped (an oversight). The Gaussian rasterizer adds blur, so it cannot reproduce staircase edges.
+Only the deformation field was retrained on data rendered with 4×4 rays per pixel and averaged
+(`--supersample 4`) (small-motion data, 7000 iterations, seed 0).
 
-| 正解画像 | test PSNR | SSIM | ガウシアン | 球 ratio（法線 / 接線） | 立方体 ratio（法線 / 接線） |
+| Ground-truth images | test PSNR | SSIM | Gaussians | Sphere ratio (normal / tangential) | Cube ratio (normal / tangential) |
 |---|---|---|---|---|---|
-| ギザギザ（これまで） | 25.7 dB | 0.952 | 39,946 | 0.46（0.18 / 0.74） | 0.13（0.27 / 0.13） |
-| 滑らか | 28.3 dB | 0.966 | 41,800 | 0.49（0.19 / 0.75） | 0.12（0.27 / 0.12） |
+| Aliased (so far) | 25.7 dB | 0.952 | 39,946 | 0.46 (0.18 / 0.74) | 0.13 (0.27 / 0.13) |
+| Antialiased | 28.3 dB | 0.966 | 41,800 | 0.49 (0.19 / 0.75) | 0.12 (0.27 / 0.12) |
 
-16. **画質の数字は 2.6 dB 上がるが、動きの正しさは変わらない。** 球の面に沿った滑りもそのまま残る。
-    このページの結論（表現どうしの優劣、滑り、浮遊）は動きの評価に基づくので、そのまま成り立つと考えている。
-    ただし変形場以外は測り直していない。
-17. **2.6 dB のうち、どれだけが採点の分かは測っていない。** 止まったシーンでは、伸び 7.5 dB のうち 4.7 dB が
-    「同じモデルを滑らかな正解で採点し直しただけ」の分だった（README の「目安」）。
-    止まったシーンは滑らかなデータで 37.9 dB に届くので、動くシーンとの差は約 10 dB 残る。
-    この差は動きの表現と 1 時刻 1 視点の条件によるもので、正解画像の質では埋まらない。
+16. **The image-quality number rises by 2.6 dB, but the motion accuracy does not change.** The sliding along
+    the sphere surface remains as it was. The conclusions of this page (ranking of representations, sliding,
+    floaters) rest on the motion evaluation, so they are believed to hold as they are. Only the deformation
+    field was re-measured, though.
+17. **How much of the 2.6 dB is due to scoring was not measured.** In the static scene, 4.7 dB of a 7.5 dB gain
+    was "the same model re-scored against antialiased ground truth" (see the top-level README).
+    The static scene reaches 37.9 dB on antialiased data, so a gap of about 10 dB to the dynamic scene remains.
+    That gap comes from the motion representation and the one-view-per-time-step condition, and the quality
+    of the ground-truth images does not close it.
 
-## 次に確かめること
+## What to check next
 
-- 追跡の損失: 重みを上げる、画素ごとに描いた位置で比べる形にする（上の 15.）
-- 位置を追う: 残った浮遊（0.41）と、立方体の ratio の差。全時刻で形を作ってから時間の順に追う、の組み合わせ
-- 変形場: 残った接線方向の滑りが、模様の細かさや、制御点で動きを持つ方式（SC-GS）でどう変わるか
-- カメラの回る速さと物体の動く速さの比を変えたときの崩れ方（単眼の曖昧さ）
+- Tracking loss: raise the weight; compare positions rendered per pixel (finding 15)
+- Trajectory: the remaining floaters (0.41) and the gap in the cube ratio. Combine "build the shape from all times, then track in time order"
+- Deformation field: how the remaining tangential sliding changes with the fineness of the pattern, and with a method that carries motion on control points (SC-GS)
+- How things break when the ratio between camera speed and object speed changes (monocular ambiguity)

@@ -1,26 +1,30 @@
 # -*- coding: utf-8 -*-
 """
-時刻ごとの位置を直接持つガウシアン（Dynamic 3D Gaussians, Luiten et al. 3DV 2024 の簡略版）。
+Gaussians that directly hold per-time-knot positions
+(a simplified version of Dynamic 3D Gaussians, Luiten et al. 3DV 2024).
 
-ガウシアンの数・色・不透明度・大きさ・向きは時刻によらず、位置だけが時刻で変わる。各ガウシアンが
-時刻の節点（[0,1] に等間隔に n_knots 個）ごとのずれを持ち、節点の間は線形に補間する:
+The number, color, opacity, scale and orientation of the Gaussians do not depend on time. Only the position changes
+with time. Each Gaussian has an offset for each time knot (n_knots of them, evenly spaced on [0,1]), and the offsets
+are linearly interpolated between knots:
 
-    offsets (N, n_knots, 3)      時刻 t の位置 = means + 補間(offsets, t)
+    offsets (N, n_knots, 3)      position at time t = means + interp(offsets, t)
 
-gs/deform.py（基準の形を MLP でずらす）と違い、動きはガウシアンごとに自由で、基準の形で
-すべての時刻をおおまかに表せる必要がない。gs/spacetime.py（現れて消える）と違い、同じガウシアンが
-最初から最後まで存在するので、物体の同じ点を追い続けるしかない。
+Unlike gs/deform.py (an MLP offsets the canonical shape), the motion is free per Gaussian, and the canonical shape
+does not need to roughly represent all times. Unlike gs/spacetime.py (appear and disappear), the same Gaussian
+exists from start to end, so it has no choice but to keep following the same point of the object.
 
-学習は時間の順に進める（train_dynamic.py --trajectory）: はじめは最初の数節点までのフレームだけで学習し、
-一定回数ごとに次の節点を使い始める。新しい節点は、直前の 2 節点から外挿した位置で初期化する
-（＝前の時刻の位置から追跡を始める）。全部の時刻を最初から同時に学習すると、まだ学習していない時刻では
-ガウシアンが物体の無い場所に取り残され、そこへ引き寄せる勾配が無い。
+Training proceeds in time order (train_dynamic.py --trajectory): at first it trains only on the frames up to the
+first few knots, and every fixed number of iterations it starts using the next knot. A new knot is initialized at
+the position extrapolated from the previous 2 knots (= tracking starts from the position at the previous time).
+If all times are trained at once from the start, at times not yet trained the Gaussians are left behind in places
+where there is no object, and there is no gradient that pulls them to the object.
 
-論文との違い:
-    - 論文は多視点（約 30 台）で、最初の時刻で形を作ってから 1 時刻ずつ最適化する。ここは 1 時刻 1 視点
-      なので、最初の数節点ぶんのフレームをまとめて使い、節点を増やしたあとも前の時刻を学習し続ける
-    - 回転は時刻によらない（論文は時刻ごと）。局所剛体などの損失は入れていない
-      （train_dynamic.py の --lambda-smooth で、近くのガウシアンの速度をそろえる損失は足せる）
+Differences from the paper:
+    - The paper is multi-view (about 30 cameras): it builds the shape at the first time and then optimizes one time
+      at a time. Here there is one view per time, so the frames of the first few knots are used together, and the
+      earlier times keep being trained after knots are added
+    - Rotation does not depend on time (per time in the paper). Losses such as local rigidity are not included
+      (a loss that aligns the velocities of nearby Gaussians can be added with --lambda-smooth of train_dynamic.py)
 """
 
 import torch
@@ -34,11 +38,11 @@ class TrajectoryModel(GaussianModel):
     def __init__(self, sh_degree=3, n_knots=21, n_active=3):
         super().__init__(sh_degree)
         self.n_knots = n_knots
-        self.n_active = min(n_active, n_knots)   # 使い始めた節点の数
+        self.n_active = min(n_active, n_knots)   # number of knots in use so far
 
     @property
     def t_active(self):
-        """学習に使ってよい時刻の上限（最後に使い始めた節点の時刻）"""
+        """Upper limit of the times that may be used for training (the time of the most recently activated knot)"""
         return (self.n_active - 1) / (self.n_knots - 1)
 
     def _set(self, tensors):
@@ -48,7 +52,8 @@ class TrajectoryModel(GaussianModel):
         super()._set(tensors)
 
     def setup_optimizer(self, spatial_scale, lr_offsets=3.2e-4, **kw):
-        """節点のずれの学習率はシーンの大きさに比例させる（後から使い始める節点があるので、減衰はさせない）"""
+        """The learning rate of the knot offsets is made proportional to the scene size
+        (no decay, because some knots only start being used later)"""
         super().setup_optimizer(spatial_scale, extra_lrs={"offsets": lr_offsets * spatial_scale}, **kw)
 
     def _segment(self, t):
@@ -57,20 +62,21 @@ class TrajectoryModel(GaussianModel):
         return i, u - i
 
     def delta_at(self, t):
-        """時刻 t のずれ（gs/render.py の delta）"""
+        """Offsets at time t (the delta of gs/render.py)"""
         i, w = self._segment(t)
         o = self.params["offsets"]
         return {"means": (1 - w) * o[:, i] + w * o[:, i + 1]}
 
     def velocity_at(self, t):
-        """時刻 t の速度 (N,3)（節点の間で一定）"""
+        """Velocity at time t (N,3) (constant between knots)"""
         i, _ = self._segment(t)
         o = self.params["offsets"]
         return (o[:, i + 1] - o[:, i]) * (self.n_knots - 1)
 
     @torch.no_grad()
     def activate_next(self):
-        """次の節点を使い始める。直前の 2 節点から外挿した位置で初期化し、それより後の節点も同じ位置にしておく"""
+        """Start using the next knot. It is initialized at the position extrapolated from the previous 2 knots,
+        and all later knots are set to the same position"""
         k = self.n_active
         if k >= self.n_knots:
             return False
