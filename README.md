@@ -1,104 +1,105 @@
-# 3D Gaussian Splatting（PyTorch、スクラッチ実装）
+# 3D Gaussian Splatting from scratch (PyTorch)
 
-Kerbl et al. (2023) "3D Gaussian Splatting for Real-Time Radiance Field Rendering" を、学習用に
-外部の 3DGS ライブラリを使わずに実装したもの。公式実装では CUDA で手書きしている微分可能
-ラスタライザも PyTorch のテンソル演算で書き、逆伝播は基本的に autograd に任せている。
-入力は nerf-toy と同じ Blender 合成データ形式（`transforms_*.json` + 画像）。
+A learning-oriented implementation of Kerbl et al. (2023), "3D Gaussian Splatting for Real-Time Radiance Field
+Rendering", with no external 3DGS library. The differentiable rasterizer, which the official code writes by hand
+in CUDA, is written with PyTorch tensor operations and differentiated by autograd.
+Input is the Blender synthetic format (`transforms_*.json` + images).
 
-## NeRF（nerf-toy）との違い
+It also contains minimal versions of three dynamic-scene (4DGS) representations, and three experiments: on glossy
+surfaces, on how well dynamic representations recover the true motion, and on relighting a translucent object
+with an existing relightable method.
 
-|  | NeRF | 3DGS |
-|---|---|---|
-| シーンの表現 | MLP（密度と色を返す関数。陰的） | 数万〜数百万個の 3D ガウシアン（陽的） |
-| 1 画素の描画 | レイ上の数百点で MLP を評価 | ガウシアンを画面に投影し、手前から α ブレンディング |
-| 合成の式 | C = Σ c_i α_i T_i（i はレイ上のサンプル点） | C = Σ c_i α_i T_i（i はその画素に重なるガウシアン） |
-| 構造の変化 | なし（ネットワークの形は固定） | 学習中にガウシアンを増やす・減らす（densification） |
+Everything was developed and measured on a Quadro M4000 (8 GB, Maxwell generation).
 
-合成の式は同じで、「レイ上のサンプル点」が「画面上で重なるガウシアン」に置き換わっている。
-MLP を何百回も評価する代わりに、投影と並べ替えで済むのが速さの源。
+## At a glance
 
-## 構成
+- **3DGS from scratch.** The whole pipeline, including the differentiable tile rasterizer, is PyTorch tensor
+  code. It is checked against a naive per-pixel renderer (image and gradients agree to within 1e-6).
+- **4DGS in the same code base.** Three dynamic representations (deformation field, spacetime Gaussians,
+  per-time trajectories), compared on scenes whose true motion is known. The deformation field is also run on D-NeRF.
+- **Experiments that ask where the method fails and why**, on gloss, motion, and translucency. Each one
+  ends in a cause that was tested, not only a score.
 
-| ファイル | 内容 |
+| What | Result |
 |---|---|
-| `gs/gaussians.py` | ガウシアンのパラメータ、初期化、densification（clone / split / prune）と Adam の状態の作り直し、.ply 書き出し |
-| `gs/rasterize.py` | 微分可能ラスタライザ: 3D→2D 投影、タイル割り当てとソート、α ブレンディング |
-| `gs/render.py` | パラメータの活性化 → 投影 → SH で色 → ラスタライズ をつなぐ |
-| `gs/sh.py` | 球面調和関数による視点依存の色 |
-| `gs/loss.py` | L1 + SSIM 損失、PSNR |
-| `gs/camera.py` | カメラ（Blender の camera-to-world を OpenCV 流儀に変換して保持） |
-| `gs/dataset.py` | Blender 形式データの読み込み（D-NeRF 形式の各フレームの時刻 `time` も読む） |
-| `gs/deform.py` | 動くシーン用の変形場: 基準の位置と時刻から、位置・回転・大きさのずれを返す MLP |
-| `gs/spacetime.py` | 動くシーン用の、時刻を持つガウシアン: 各ガウシアンが時刻・時間幅・速度を持ち、その前後でだけ現れる |
-| `gs/trajectory.py` | 動くシーン用の、時刻ごとの位置を持つガウシアン: 数と見た目は固定で、位置だけを時刻の節点ごとに持つ |
-| `train.py` | 学習（val 画像・log.csv・チェックポイント・point_cloud.ply を `logs/<expname>/` に出力） |
-| `render_video.py` | 学習済みガウシアンで物体の周りを一周する新規視点画像を描画し、描画速度を表示 |
-| `make_toy_dataset.py` | 動作確認用のおもちゃデータ（球 + 立方体。nerf-toy と同じ） |
-| `train_dynamic.py` | 動くシーンの学習（4DGS の最小版。test 画像・時刻を動かした GIF・eval.json を出力） |
-| `make_toy_dynamic.py` | 動くおもちゃデータ（球が弾んで脈打ち、立方体が往復する。D-NeRF 形式） |
-| `tests/test_rasterize.py` | ラスタライザの検算（素朴な全画素版と画像・勾配を突き合わせる、手書き逆伝播の gradcheck） |
-| `experiments/` | このリポジトリの実装を使った実験（下記） |
+| Static 3DGS, toy scene | 37.9 dB test PSNR |
+| Deformation-field 4DGS, D-NeRF `jumpingjacks` (400 px) | 34.7 dB, SSIM 0.987 |
+| Gloss | 3DGS is 16–17 dB worse on a gold statue than on a diffuse one; a higher SH degree does not fix it |
+| Motion | A model can score well on PSNR while getting the motion wrong (surface sliding, error 0.74) |
+| Translucency | A relightable method (R3DG) keeps the look in novel views but relights wax as if it were opaque |
 
-## アルゴリズムとコードの対応
+![D-NeRF jumpingjacks: ground truth, render, and the canonical Gaussians](experiments/dynamic/figures/dnerf_jumpingjacks.png)
 
-読む順番の目安。論文の式番号は arXiv 版。
+*Deformation-field 4DGS on D-NeRF `jumpingjacks`, test views at unseen times. Bottom row: the canonical
+Gaussians before the deformation is applied.*
 
-1. **表現**（`gaussians.py`）: 各ガウシアンは中心 μ、スケール s（log で保持）、回転 q（クォータニオン）、
-   不透明度 o（logit で保持）、SH 係数を持つ。活性化関数（exp / 正規化 / sigmoid）で値域の制約を外している。
-2. **3D 共分散**（`rasterize.covariance_3d`）: Σ = R S Sᵀ Rᵀ（式 6）。Σ を直接最適化すると
-   半正定値でなくなりうるので、スケールと回転に分解して持つ。
-3. **投影**（`rasterize.project_gaussians`）: 透視投影を中心のまわりで一次近似（ヤコビアン J）すると
-   ガウシアンはガウシアンに写る。Σ' = J W Σ Wᵀ Jᵀ（式 5、EWA splatting）。
-4. **色**（`sh.py`）: 視線方向で SH を評価。学習開始時は 0 次（一定色）だけ使い、1000 iter ごとに次数を上げる。
-5. **タイル割り当てとソート**（`rasterize.bin_tiles`）: 画面をタイルに分け、各ガウシアンが（3σ の範囲で）
-   覆うタイルを列挙し、キー =（タイル番号, 深度）で 1 回だけソートする。これで「タイルごとに手前から順」の
-   並びが全タイル同時に得られる（論文 Sec. 6 の要点）。
-6. **α ブレンディング**（`rasterize.composite`）: α_i = o_i exp(-½ dᵀ Σ'⁻¹ d)、
-   C = Σ c_i α_i T_i、T_i = Π_{j<i}(1-α_j)。α < 1/255 は捨て、α は 0.99 で頭打ちにする。
-7. **損失**（`loss.py`）: L = 0.8 L1 + 0.2 (1 − SSIM)（式 7）。
-8. **densification**（`GaussianModel.densify_and_prune`, 論文 Sec. 5.2）: 100 iter ごとに、画面上の位置勾配の
-   平均が大きいガウシアンを、小さければ複製（clone）、大きければ 2 つに分割（split）。ほぼ透明なもの・
-   大きすぎるものは削除（prune）。3000 iter ごとに不透明度を一斉に下げ（opacity reset）、不要なものを
-   prune されやすくする。パラメータの数が変わるので Adam の 1 次・2 次モーメントも同じ形に作り直す（`_replace`）。
+## Layout
 
-## 公式実装との違い（PyTorch で書くための工夫）
+| File | Contents |
+|---|---|
+| `gs/gaussians.py` | Gaussian parameters, initialization, densification (clone / split / prune), rebuilding the Adam state, `.ply` export |
+| `gs/rasterize.py` | Differentiable rasterizer: 3D→2D projection, tile binning and sorting, alpha blending |
+| `gs/render.py` | Activation → projection → SH colour → rasterization |
+| `gs/sh.py` | View-dependent colour with spherical harmonics |
+| `gs/loss.py` | L1 + SSIM loss, PSNR |
+| `gs/camera.py`, `gs/dataset.py` | Cameras and Blender / D-NeRF format loading |
+| `gs/deform.py` | Dynamic: deformation field (an MLP maps canonical position and time to offsets) |
+| `gs/spacetime.py` | Dynamic: Gaussians with their own time, temporal width, and velocity |
+| `gs/trajectory.py` | Dynamic: fixed set of Gaussians with a position per time knot |
+| `train.py`, `render_video.py` | Static training and novel-view rendering |
+| `train_dynamic.py` | Dynamic training |
+| `make_toy_dataset.py`, `make_toy_dynamic.py` | Analytic toy datasets (a striped sphere and a cube; static and moving) |
+| `tests/` | Rasterizer checks against a naive per-pixel version (image and gradients), `gradcheck` of the hand-written backward |
+| `experiments/` | Experiments (below) |
 
-- 公式は前向き・逆向きとも CUDA で手書き。ここは前向きだけ書いて autograd で微分する。
-  ただし透過率の累積和（`SegmentedExclusiveCumsum`）だけは逆伝播を手で書いている（下記）。
-- 公式はタイル内の各画素がガウシアンを手前から 1 つずつ処理し、T < 10⁻⁴ で打ち切る。
-  ここは (タイル内の画素 × 交差) の組を全部まとめてテンソルで計算する（打ち切りなし。残りの寄与は
-  10⁻⁴ 未満なので結果はほぼ同じ）。
-- T_i（区間ごとにリセットされる累積積）は、log 空間で全体の累積和を 1 回とって区間先頭の値を引いて求める。
-  autograd に任せると、この「引く」部分の逆伝播が float64 の atomicAdd になり、それを持たない
-  Maxwell 世代の GPU ではとても遅い。そこで随伴（区間ごとの逆向き累積和）を手で書いている。
-- タイルの大きさは既定で 8px（公式は 16px）。まとめて計算する方式ではタイル内の無駄な画素も計算するので、
-  小さいガウシアンが多いと小さいタイルの方が速い。
-- タイル割り当ての半径を、不透明度を考慮して「α が 1/255 を下回る距離」で打ち切っている（3σ を超えない範囲）。
-  その外側の画素は結局捨てられるので描画結果は厳密に同じまま、計算量だけ減る（テストで確認）。
-- 一度に作る (画素 × 交差) テンソルが `--max-entries` を超えるときは、タイルをチャンクに分け、
-  gradient checkpointing（逆伝播時に再計算）でメモリを抑える。
-- 公式の `antialiasing` オプションや露出補正など、後から追加された機能は入れていない。
+## Algorithm and code
 
-## セットアップ
+1. **Representation** (`gaussians.py`): mean μ, scale s (stored as log), rotation q (quaternion),
+   opacity o (stored as logit), SH coefficients.
+2. **3D covariance** (`rasterize.covariance_3d`): Σ = R S Sᵀ Rᵀ (Eq. 6).
+3. **Projection** (`rasterize.project_gaussians`): Σ' = J W Σ Wᵀ Jᵀ (Eq. 5, EWA splatting).
+4. **Colour** (`sh.py`): SH evaluated in the view direction. Starts at degree 0, one degree added every 1000 iterations.
+5. **Tile binning and sorting** (`rasterize.bin_tiles`): one sort by the key (tile index, depth) gives
+   front-to-back order for all tiles at once.
+6. **Alpha blending** (`rasterize.composite`): α_i = o_i exp(−½ dᵀ Σ'⁻¹ d), C = Σ c_i α_i T_i,
+   T_i = Π_{j<i}(1 − α_j). α below 1/255 is dropped, α is capped at 0.99.
+7. **Loss** (`loss.py`): L = 0.8 L1 + 0.2 (1 − SSIM) (Eq. 7).
+8. **Densification** (`GaussianModel.densify_and_prune`): every 100 iterations, clone small / split large
+   Gaussians with a large mean screen-space gradient, prune transparent or oversized ones. Opacity is reset
+   every 3000 iterations.
+
+## Differences from the official implementation
+
+- Only the forward pass is written; autograd does the backward pass. The one exception is the transmittance
+  cumulative sum (`SegmentedExclusiveCumsum`): autograd's backward for it needs a float64 `atomicAdd`,
+  which Maxwell GPUs lack, so the adjoint is written by hand.
+- All (pixel, Gaussian) pairs in a tile are computed in one tensor, with no early termination at T < 10⁻⁴.
+- Tiles are 8 px by default (official: 16 px). With the batched approach, smaller tiles waste fewer pixels.
+- The binning radius is cut where α falls below 1/255, taking opacity into account. The image is exactly
+  the same (checked in the tests); only the work decreases.
+- When the (pixel × Gaussian) tensor exceeds `--max-entries`, tiles are processed in chunks with
+  gradient checkpointing.
+- Later additions to the official code (antialiasing option, exposure compensation) are not included.
+
+## Setup
 
 ```bash
-cd 3dgs-toy
 python -m venv .venv
 .venv/Scripts/python -m pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cu118
 .venv/Scripts/python -m pip install -r requirements.txt
 ```
 
-Quadro M4000 は Maxwell 世代（sm_52）なので、CUDA 12.8 以降のビルドでは動かない。CUDA 11.8 版を使う。
+The Quadro M4000 is Maxwell (sm_52), which CUDA 12.8+ builds no longer support, hence the CUDA 11.8 build.
 
-## 使い方
+## Usage
 
-### 0. ラスタライザの検算
+Rasterizer check:
 
 ```bash
 .venv/Scripts/python tests/test_rasterize.py
 ```
 
-### 1. おもちゃデータで学習
+Static toy scene:
 
 ```bash
 .venv/Scripts/python make_toy_dataset.py --out data/toy_sphere
@@ -106,151 +107,151 @@ Quadro M4000 は Maxwell 世代（sm_52）なので、CUDA 12.8 以降のビル�
 .venv/Scripts/python render_video.py --ckpt logs/toy/ckpt_007000.pt --gif
 ```
 
-`logs/toy/val_*.png` は左が正解、右が描画。`logs/toy/point_cloud.ply` は公式と同じ形式なので、
-SuperSplat などの 3DGS ビューアにドラッグ＆ドロップすれば中身を回して見られる
-（ワールドは Blender と同じ +Z 上なので、ビューアによっては横倒しに見える）。
+`logs/toy/point_cloud.ply` uses the official format and opens in 3DGS viewers such as SuperSplat.
 
-おもちゃデータの正解画像は、1 画素を 4×4 本のレイで描いて平均している（`--supersample 4`、既定）。
-はじめは 1 画素 1 本で描いていて、輪郭と模様の境目がギザギザだった。これは見落としで、
-PSNR を 30 dB で頭打ちにしていた（下の「目安」を参照）。
-
-### 2. nerf_synthetic（lego など）
-
-公式の `nerf_synthetic` を `data/nerf_synthetic/lego` に置いて:
+nerf_synthetic (place the official data in `data/nerf_synthetic/lego`):
 
 ```bash
 .venv/Scripts/python train.py --datadir data/nerf_synthetic/lego --expname lego --half-res --init-points 50000
 ```
 
-### 3. 動くシーン（4DGS の最小版）
-
-Deformable 3D Gaussians（Yang et al., CVPR 2024）の簡略版。ガウシアンは基準の形を 1 組だけ持ち、
-時刻 t の形は MLP が基準の位置 x と t から (δx, δq, δs) を出してずらす。色と不透明度は時刻によらない。
-はじめの `--warm-up` 回は変形なしで学習し、おおまかな形ができてから MLP を動かす。
-データは D-NeRF と同じ形式（`transforms_*.json` の各フレームに `"time"`）。学習用は 1 時刻に 1 視点しかない。
+Dynamic toy scene (D-NeRF format, one view per time step):
 
 ```bash
 .venv/Scripts/python make_toy_dynamic.py
 .venv/Scripts/python train_dynamic.py --datadir data/toy_dynamic --expname dyn_toy --iters 7000 --warm-up 1000 --densify-until 5000 --init-extent 2.0
-.venv/Scripts/python train_dynamic.py --datadir data/toy_dynamic --expname dyn_toy_static --iters 7000 --static --densify-until 5000 --init-extent 2.0
 ```
 
-結果（256 px、学習 100 枚、テストは学習に無い時刻の 20 枚。Quadro M4000）:
-
-| | test PSNR | SSIM | ガウシアン | 学習時間 |
-|---|---|---|---|---|
-| 変形あり | 25.7 dB | 0.952 | 39,946 | 35 分（0.30 秒/iter、VRAM 3.3 GB） |
-| 変形なし（`--static`） | 14.1 dB | 0.812 | 29,332 | 24 分 |
-
-変形なしでは、動く球と立方体が時刻をまたいでぼやけた 1 つの形になる。
-
-**この表と、以下の動くシーンの数値は、正解画像がギザギザだった頃のデータ（`--supersample 1`）で測ったもの。**
-今の既定（`--supersample 4`）で変形ありを学習し直すと 28.3 dB、SSIM 0.966（ガウシアン 41,800 個）になる。
-動きの正しさ（[実験](experiments/dynamic/README.md)の ratio）は変わらない。ほかの設定は測り直していないので、
-下の数値どうしの比較はできるが、今のデータで出る値とは 2〜3 dB ずれるはず。
-
-苦手な例として、立方体が球のまわりを半周するデータ（`--orbit`、約 5 単位動く）も試した（5000 iter）:
-
-- `--warm-up 1000`: 15.1 dB。変形なしで学習するあいだに、時刻ごとに別の場所にある立方体は
-  どの場所でもほとんど見えないので、そのガウシアンが消されてしまう。変形を始めた時には、動かす相手が残っていない
-- `--warm-up 0`: 8.8 dB。ランダムな初期点のまま MLP を動かすと発散し、シーン全体が画面の外へ飛ぶ
-- 変形なし: 11.8 dB
-
-基準の形を 1 つ持ってずらす方式は、物体が自分の大きさ程度しか動かないシーン（D-NeRF の合成データなど）
-を想定している。
-
-もう 1 つの表現として、時刻を持つガウシアン（Spacetime Gaussians, Li et al., CVPR 2024 の簡略版）を
-`--spacetime` で選べる。各ガウシアンが時刻 μ_t・時間幅 σ_t・速度 v を持ち、時刻 t では位置 x + v(t − μ_t)、
-不透明度 o·exp(−½((t − μ_t)/σ_t)²) で描く。MLP も基準の形も要らない。
-
-```bash
-.venv/Scripts/python train_dynamic.py --datadir data/toy_dynamic --expname dyn_toy_st --iters 7000 --spacetime --densify-until 5000 --init-extent 2.0
-```
-
-小さく動くデータでは 23.7 dB（変形場より 2 dB 低い。ガウシアン 243,811 個、33 分）、`--orbit` では 23.0 dB
-（変形場は 15.1 dB）。正解の動きと突き合わせた比較は[実験](experiments/dynamic/README.md)にある。
-
-どちらの表現でも、`--lambda-smooth` で「近くのガウシアンの速度をそろえる」損失を足せる（変形場では 1e-4 で
-26.3 dB に上がり、面に沿った滑りも減る）。`--spacetime` では `--min-t-scale` で時間幅に下限を付けられる。
-
-3 つ目の表現として、時刻ごとの位置を持つガウシアン（Dynamic 3D Gaussians, Luiten et al., 3DV 2024 の簡略版）を
-`--trajectory` で選べる。数・色・不透明度・大きさは固定で、位置だけを時刻の節点（既定 21 個）ごとに持ち、
-節点の間は線形に補間する。速度の正則化なしでは崩れるので、`--lambda-smooth` と一緒に使う。
-
-```bash
-.venv/Scripts/python train_dynamic.py --datadir data/toy_dynamic --expname dyn_toy_tr_smooth --iters 7000 --trajectory --lambda-smooth 1e-4 --densify-until 5000 --init-extent 2.0
-```
-
-小さく動くデータでは 24.3 dB（変形場より 1.4 dB 低い）、`--orbit` では 20.4 dB（7000 iter）。
-`--knots-init 3` にすると、元の論文のように時間の順に節点を増やしながら学習する。1 時刻 1 視点のこのデータでは
-画質が大きく下がる（19.3 dB / 17.6 dB）が、`--orbit` の立方体の動きはこちらのほうが合う。
-
-`--lambda-track` は、おもちゃデータの正解の動きから作った「誤りのない 2D 追跡」に合わせる損失（実際の手法が
-学習済みの点追跡モデルで入れる手がかりの、上限を測るためのもの）。`--orbit` のデータでは `--orbit` も付ける。
-
-## 主なオプション
-
-- `--iters` : 学習回数（公式は 30000。densification は既定で前半 `iters/2` まで）
-- `--init-points` / `--init-extent` / `--init-center` : 初期点の数、それを置く立方体の半辺長と中心
-- `--bg R G B` : 背景色（既定は白。`--black-bkgd` で黒）。背景が一様な色のデータ用
-- `--grad-thresh` : densification の閾値（公式 0.0002）。下げるとガウシアンが増える
-- `--max-screen-size 0` : 画面上で大きすぎるものの prune を無効化
-- `--densify-until 0` : densification をしない（初期点のまま最適化だけする）
-- `--tile` / `--max-entries` : ラスタライザの設定。CUDA OOM なら `--max-entries` を下げる
-- `--black-bkgd` : 背景を黒として扱う
-
-## 目安（Quadro M4000 での実測、おもちゃデータ 200px）
-
-`--iters 7000`（その他は既定値）の結果:
-
-| 項目 | 値 |
-|---|---|
-| 学習時間 | 約 22 分（0.13〜0.19 秒/iter。ガウシアンが増えると遅くなる） |
-| test PSNR（8 枚） | 37.9 dB |
-| ガウシアン数 | 20000（初期）→ 28659（最終。途中で不要な初期点が prune されていったん減る） |
-| VRAM（ピーク） | 2.4 GB |
-| 描画 | 約 68 ms/枚（約 15 fps） |
-
-学習時間と描画時間は `--supersample 1` のデータで測った値（ガウシアン数がほぼ同じなので変わらないはず）。
-
-### 正解画像のギザギザ（見落とし）
-
-はじめの `make_toy_dataset.py` / `make_toy_dynamic.py` は 1 画素を 1 本のレイで描いていた。
-輪郭と模様の境目は階段状になり、半透明の画素は 1 つもない。一方、ラスタライザは画面上の共分散に
-0.3 を足してぼかすので、階段状の境目は原理的に再現できない。この食い違いに気づかず、
-test PSNR 30.2 dB を「この実装の実力」として載せていた。
-
-2 通りのデータで学習したモデルを、それぞれ両方の試験画像で採点した結果（7000 iter、seed 0、各 1 回）:
-
-| 学習に使ったデータ | ギザギザの試験画像で採点 | 滑らかな試験画像で採点 |
+| Flag | Representation | Simplified from |
 |---|---|---|
-| `--supersample 1`（ギザギザ） | 30.4 dB | 35.0 dB |
-| `--supersample 4`（滑らか） | 30.5 dB | 37.9 dB |
+| (default) | Deformation field: one canonical set, an MLP outputs (δx, δq, δs) from position and time | Deformable 3D Gaussians (Yang et al., CVPR 2024) |
+| `--spacetime` | Each Gaussian has a time μ_t, temporal width σ_t, and velocity v; it appears only around μ_t and moves in a straight line | Spacetime Gaussians (Li et al., CVPR 2024) |
+| `--trajectory` | Count, colour, opacity, and size are fixed; only the position is stored per time knot (21 by default). Use with `--lambda-smooth` | Dynamic 3D Gaussians (Luiten et al., 3DV 2024) |
+| `--static` | No motion (baseline) | |
 
-- 30 dB の頭打ちは採点のせいだった。同じモデルを滑らかな正解と比べるだけで 35.0 dB になる（+4.7 dB）
-- 学習も良くなる。同じ滑らかな試験画像で比べて 35.0 → 37.9 dB（+2.9 dB）
-- ギザギザの試験画像で採点すると、どちらで学習しても 30.4〜30.5 dB で区別がつかない
+`--lambda-smooth` adds a loss that aligns the velocities of neighbouring Gaussians. `--min-t-scale` puts a lower
+bound on the temporal width (`--spacetime` only). `--lambda-track` adds an error-free 2D tracking loss built from
+the known toy motion, to measure the upper bound of what a point tracker could give.
 
-同じ 200px の画像を nerf-toy の NeRF で描くと約 12 秒なので、PyTorch 実装のままでも 150 倍以上速い。
-公式の CUDA 実装は処理を 1 つのカーネルにまとめているので、さらに 1〜2 桁速い。
+Main options: `--iters`, `--init-points` / `--init-extent` / `--init-center`, `--bg R G B` or `--black-bkgd`,
+`--grad-thresh`, `--densify-until` (0 disables densification), `--tile`, `--max-entries` (lower it on CUDA OOM).
 
-log.csv で 3000 iter の val PSNR だけ極端に低い（約 8 dB）のは、opacity reset で全ガウシアンの
-不透明度を 0.01 に下げた直後の状態を評価しているため。数百 iter で元に戻る。
+## Results
 
-## 実験
+### Static toy scene (200 px, 7000 iterations)
 
-| 実験 | 内容 |
+| | |
 |---|---|
-| [光沢面で 3DGS は破綻するか](experiments/gloss/README.md) | GoLD_rayt で描いた金の像と同色の拡散面の像で比較。金は像の領域の PSNR で 16〜17 dB 低く、学習視点でも同じくらい悪い（汎化の失敗ではなく表現力の不足）。1 点ずつ SH を当てはめる検証では、次数を上げると学習視点は覚えられるがテスト視点は 24〜27 dB で頭打ちになり、天井は SH の次数ではなく 1 点あたりの観測の粗さで決まる。反射方向で照明を共有するモデルは、照明を正しく復元するが、この像では相互反射（観測の 38%）と画素より細かい凹凸のため全体では点ごとの SH に届かず、それらを除いた所でだけ上回る。点ごとに最適化した粗さは、画素の中の法線のばらつきとはほとんど相関しない（順位相関 0.14。仮説どおりの合成データなら同じ手順で 0.89 まで取り戻せる）。凹凸を制御した球では順位相関 0.93 で合い、大きさは換算の 0.72〜0.87 倍（斜めの観測で反射のぼけが狭くなることと、等方なぼけで近似することで説明できる）。この異方性を補正した換算は、学習するパラメータなしで、点ごとに最適化した粗さと同等以上。3dgs-toy に遅延シェーディング（法線を合成し、反射方向で共有の照明を引く）を入れると、区画ごとのぼけの大小は正しく学べる。ただし学習したガウシアンは面の内側に半透明の厚い層を作るので、合成した法線の長さは画素の中の平均にならず、画素の大きさを変えると正解と逆向きに変わる。再現度は通常の 3DGS と同等以下 |
-| [3DGS の光沢対応手法の文献調査](experiments/gloss/reports/3DGS光沢対応手法の文献調査.md) | 上の実験で見えた 4 つの崩れ（観測の粗さ、法線と遠方照明、相互反射、画素より細かい凹凸）に沿って、SH の置き換え・共有照明・光線追跡などの系統を整理。旧 GPU での実行可能性と、3dgs-toy に足す簡略版の順序の提案つき |
-| [動くシーン: 3 つの表現を正解の動きと突き合わせる](experiments/dynamic/README.md) | 変形場と、時刻を持つガウシアンを、動きの式が分かっているおもちゃデータで比較。小さく動くデータでは変形場が 2 dB 上、大きく動くデータでは時刻つきが 8 dB 上で、得意・不得意が逆になる。変形場でも球の接線方向の動きは正解の移動量の 0.74 倍ずれている（一様な色の面の上では滑っても画像が変わらない）。時刻つきは時間幅がフレーム約 2 枚ぶんまで縮み、動きをほとんど学ばずに学習視点へ過適合する。近くのガウシアンの速度をそろえる正則化は、変形場では滑りを 0.49 倍まで減らすが、時刻つきでは全員が止まる方へ働いて逆効果。時間幅に下限を付けても動きは学ばれない。時刻ごとの位置を追う 3 つ目の表現は、正則化なしでは変形なしより悪い（13.2 dB）。時間の順に学習すると、少ない視点で作った浮遊物が残って 19.3 dB どまりで、最初から全時刻を使うと 24.3 dB になる。正解の動きから作った誤りのない 2D 追跡を損失に入れても、球の面に沿った滑りは 0.74 → 0.51 倍に減るだけで消えない |
+| Training time | about 22 min (0.13–0.19 s/iter) |
+| Test PSNR (8 views) | 37.9 dB |
+| Gaussians | 20,000 (initial) → 28,659 |
+| Peak VRAM | 2.4 GB |
+| Rendering | about 68 ms/frame (about 15 fps) |
 
-## 発展課題（学習用）
+In `log.csv`, the val PSNR at iteration 3000 is about 8 dB because it is evaluated right after the opacity reset.
 
-- **composite の逆伝播を全部手で書く**: 公式の `backward.cu` と同じく、各画素で後ろのガウシアンから順に
-  T を戻しながら ∂L/∂α・∂L/∂c を累積する。`torch.autograd.Function` で書き、`gradcheck` や
-  `tests/test_rasterize.py` の素朴な実装と突き合わせる。
-- **nerf-toy と比べる**: 同じ `data/toy_sphere` で、PSNR・学習時間・1 枚の描画時間を比べる。
-- **densification の効果を見る**: `--densify-until 0` との比較。log.csv のガウシアン数の推移も見る。
-- **SH の次数**: `--sh-degree 0`（視点非依存）と 3 の比較。光沢のあるシーンで差が出る。
-- **実写データ**: COLMAP の出力（カメラと疎な点群）を読み、SfM 点で初期化する。
+### A pitfall: aliased ground truth
+
+The toy renderers first shot one ray per pixel, so edges were staircase-shaped. The rasterizer adds 0.3 px² to
+the screen-space covariance, so it cannot reproduce staircase edges. Test PSNR was stuck at 30 dB, and that
+number was reported as the capability of the implementation. It was a limit of the scoring.
+
+| Trained on | Scored on aliased test images | Scored on antialiased test images |
+|---|---|---|
+| `--supersample 1` (aliased) | 30.4 dB | 35.0 dB |
+| `--supersample 4` (antialiased, now the default) | 30.5 dB | 37.9 dB |
+
+The same model gains 4.7 dB just by being scored against antialiased ground truth, and training on
+antialiased images adds another 2.9 dB. Scored on aliased images, the two models cannot be told apart.
+
+### Dynamic toy scene (256 px, 100 training frames, 20 test frames at unseen times)
+
+| | Small motion | Large motion (`--orbit`, the cube travels half a circle) |
+|---|---|---|
+| Deformation field | **25.7 dB** | 15.1 dB |
+| Spacetime | 23.7 dB | **23.0 dB** |
+| Trajectory + `--lambda-smooth 1e-4` | 24.3 dB | 20.4 dB (7000 iterations; the other rows in this column use 5000) |
+| Static | 14.1 dB | 11.8 dB |
+
+These numbers were measured on the older aliased data (`--supersample 1`). On the current data the deformation
+field reaches 28.3 dB; its motion accuracy does not change. The other rows were not re-measured, so they
+compare with each other but sit 2–3 dB below what the current data would give.
+
+### D-NeRF `jumpingjacks` (deformation field, 400 px, 200 training frames, 20 test frames)
+
+```bash
+.venv/Scripts/python train_dynamic.py --datadir data/dnerf/data/jumpingjacks --expname dnerf_jj --half-res --iters 20000 --warm-up 600 --densify-until 10000
+```
+
+| Iterations | Test PSNR / SSIM | Test PSNR at t = 0 and t = 1 (arms fully raised) | Gaussians | Training time |
+|---|---|---|---|---|
+| 7,000 | 29.7 dB / 0.973 | 22.0 / 19.2 dB | 30,133 | 35 min |
+| 20,000 | 34.7 dB / 0.987 | 29.3 / 28.3 dB | 55,824 | 141 min |
+
+- With 7,000 iterations the arms do not reach the raised position. The canonical arms become a fan-shaped
+  haze, and Gaussians are shrunk away per time step instead of being moved.
+- The cause was the training length: the learning rate of the deformation MLP decays before the arms have
+  moved. With 20,000 iterations the canonical arms are one solid pair and they are moved into place.
+- The hands, the thinnest and fastest part, are still broken (bottom row of the figure above).
+- If the deformation starts before the first pruning (`--warm-up 200`), the MLP diverges and the render goes blank.
+- One scene, at half resolution and with shorter training than the papers use: this is a check that the
+  implementation works on a standard benchmark, not a reproduction of published numbers.
+
+## Experiments
+
+### [Does 3DGS break on glossy surfaces?](experiments/gloss/README.md)
+
+A gold statue and a diffuse statue of the same colour, identical in everything else.
+
+- Gold is 16–17 dB worse in PSNR over the statue region, and equally bad on the training views.
+  The failure is a lack of capacity, not a failure to generalize.
+- Raising the SH degree does not fix it. In per-point SH fits, higher degrees memorize the training views,
+  but test views saturate at 24–27 dB. The ceiling is set by how coarsely each point is observed, not by the SH degree.
+- A model that shares lighting across points through the reflection direction recovers the lighting correctly.
+  On this statue it still loses to per-point SH overall, because of interreflection (38% of observations) and
+  sub-pixel bumps. It wins only where those are excluded.
+- On a sphere with controlled bumps, the per-point optimized roughness matches the roughness converted from the
+  normal variation inside the pixel footprint (rank correlation 0.93). With an anisotropy correction, the
+  conversion is as good as or better than the optimized roughness, with no learned parameter.
+- With deferred shading added to this implementation, the relative blur per region is learned correctly.
+  But the learned Gaussians form a thick semi-transparent layer inside the surface, so the length of the blended
+  normal is not the average over the pixel, and it changes in the wrong direction when the pixel size changes.
+
+A [literature survey of glossy 3DGS methods](experiments/gloss/reports/glossy_3dgs_literature_survey.md)
+is organised around the four failure modes seen above.
+
+### [Dynamic scenes: three representations against the true motion](experiments/dynamic/README.md)
+
+The toy motion is known in closed form, so the motion of the Gaussians can be compared with the truth.
+
+- Strengths are opposite. The deformation field is 2 dB ahead on small motion; spacetime Gaussians are 8 dB
+  ahead on large motion.
+- Even the deformation field gets the tangential motion on the sphere mostly wrong (error 0.74 of the true
+  displacement). On a uniformly coloured surface, sliding does not change the image (the aperture problem).
+  PSNR does not show this.
+- Spacetime Gaussians barely learn motion. Their temporal width shrinks to about two frames and they overfit
+  the training views by appearing and disappearing.
+- Aligning neighbouring velocities reduces sliding for the deformation field (0.74 → 0.49) but hurts
+  spacetime Gaussians, where the cheapest way to agree is for everyone to stop.
+- The trajectory representation collapses without regularization. Training it in time order, as the original
+  paper does with 27 cameras, leaves floaters when there is one view per time step.
+- Even an error-free 2D tracking loss reduces the sliding only to 0.51.
+
+### [Relighting a translucent object with Relightable 3D Gaussians](experiments/relight/README.md)
+
+A wax-like statue and an opaque control, reconstructed and relit with R3DG (run from the official code, which
+is not included here), and compared with ground-truth renders under each new light.
+
+- Novel views under the training light keep the look (35–37 dB). Relighting does not: the relit wax scores
+  22–30 dB on the statue.
+- The relit wax has two to three times the shading contrast and about twice the sharpness of the truth,
+  under every light. These are image cues to translucency, so the relit wax is predicted to look more opaque.
+- Training length is not the cause: running the material stage five times longer (the official length)
+  leaves the relit scores and the contrast error unchanged.
+- PSNR ranks the conditions differently from the cues: the wax under uniform light has the best PSNR and the
+  largest contrast error.
+- Next step: a perception experiment to test whether observers see the material the cues predict.
+
+## License
+
+MIT

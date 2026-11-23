@@ -1,0 +1,13 @@
+=== opaque_sharp   (render / answer ratio of the mean over 8 views; in brackets render, answer)
+light                mean                   contrast               sharp                  hi_cover              
+train_light_test     0.97 (0.513, 0.529)    1.37 (0.154, 0.113)    1.03 (0.022, 0.021)    1.01 (0.162, 0.160)   
+relit_bryanston180   0.97 (0.518, 0.536)    1.19 (0.143, 0.120)    0.92 (0.022, 0.023)    1.14 (0.184, 0.162)   
+relit_sky12          0.95 (0.472, 0.496)    0.97 (0.077, 0.080)    1.33 (0.017, 0.012)    1.55 (0.134, 0.086)   
+relit_uniform        1.01 (0.602, 0.599)    1.53 (0.068, 0.045)    1.95 (0.020, 0.010)    1.73 (0.128, 0.074)   
+
+=== wax_thin   (render / answer ratio of the mean over 8 views; in brackets render, answer)
+light                mean                   contrast               sharp                  hi_cover              
+train_light_test     0.95 (0.607, 0.638)    2.70 (0.114, 0.042)    2.01 (0.011, 0.006)    1.14 (0.177, 0.156)   
+relit_bryanston180   0.96 (0.614, 0.638)    2.17 (0.103, 0.048)    1.87 (0.012, 0.006)    1.21 (0.173, 0.143)   
+relit_sky12          0.90 (0.565, 0.625)    2.65 (0.056, 0.021)    1.54 (0.007, 0.004)    1.09 (0.086, 0.079)   
+relit_uniform        1.00 (0.717, 0.718)    3.64 (0.036, 0.010)    1.63 (0.006, 0.004)    1.32 (0.099, 0.076)   
