@@ -8,8 +8,10 @@ from .rasterize import conic_and_radius, covariance_3d, project_gaussians, raste
 from .sh import eval_sh
 
 
-def render(model, cam, bg, sh_degree, tile=8, max_entries=2 ** 25, near=0.2, delta=None):
+def render(model, cam, bg, sh_degree, tile=8, max_entries=2 ** 25, near=0.2, delta=None, clamp_color=True):
     """
+    clamp_color: clamp the colour of each Gaussian at 0 (the original 3DGS). False lets colours outside the gamut of
+                 the colour space be negative in a channel (gs/color.py, linear-srgb-noclamp).
     delta: for dynamic scenes. Time-dependent offsets (produced by gs/deform.py or gs/spacetime.py).
            Any key may be omitted.
            "means" / "log_scales" (N,3)  added to the position and the log scale
@@ -60,7 +62,9 @@ def render(model, cam, bg, sh_degree, tile=8, max_entries=2 ** 25, near=0.2, del
     n_coef = (sh_degree + 1) ** 2
     sh = torch.cat([p["sh0"][ids], p["shN"][ids, : n_coef - 1]], 1)
     dirs = F.normalize(means - cam.center, dim=-1)
-    color = (eval_sh(sh_degree, sh, dirs) + 0.5).clamp(min=0.0)
+    color = eval_sh(sh_degree, sh, dirs) + 0.5
+    if clamp_color:
+        color = color.clamp(min=0.0)
 
     image, alpha, on_screen = rasterize(means2d, conic, opacity, color, tile_radius, depth,
                                         cam.W, cam.H, bg, tile=tile, max_entries=max_entries)

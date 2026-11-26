@@ -10,6 +10,17 @@ in the repository. The motivation comes from the [gloss experiment](../gloss/REA
 to express what is outside "a colour per point and direction", and a relightable method has to commit to a
 material model. R3DG's model is an opaque surface BRDF, so a scattering material is outside it by design.
 
+## Summary
+
+- Novel views under the training light keep the look of both materials (35–37 dB).
+- Relit, the wax has two to three times the shading contrast of the truth under every light. Low shading
+  contrast is a cue to translucency, so the relit wax is predicted to look more opaque than it is.
+- Training the material stage five times longer does not change this. The error comes from the material
+  model, which has no scattering.
+- PSNR does not show it: the condition with the best PSNR has the largest contrast error.
+
+Details: [Results](#results), [Findings](#findings), [Limitations](#limitations).
+
 ## Setup
 
 ### Stimuli (rendered with GoLD_rayt)

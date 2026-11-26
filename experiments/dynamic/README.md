@@ -9,6 +9,23 @@ closed form (`make_toy_dynamic.py`).
 | Spacetime | Each Gaussian has a time μ_t, temporal width σ_t, and velocity v. It appears only around that time and moves in a straight line (simplified Spacetime Gaussians) | `gs/spacetime.py` (`train_dynamic.py --spacetime`) |
 | Trajectory | Count, colour, opacity, and size are fixed. Only the position is stored per time knot (simplified Dynamic 3D Gaussians). Covered in the [addition below](#addition-the-trajectory-representation) | `gs/trajectory.py` (`train_dynamic.py --trajectory`) |
 
+## Summary
+
+The toy motion is known exactly, so the motion of the Gaussians can be scored directly, not only the image.
+The table is the whole story. Findings are numbered 1–17 across the page, in the order they were made.
+
+| Section | Question | Answer |
+|---|---|---|
+| [Results](#results), [Findings](#findings) 1 | Which representation is better? | It depends on the size of the motion. The deformation field is 2 dB ahead on small motion; spacetime Gaussians are 8 dB ahead on large motion |
+| [Findings](#findings) 2–4 | Does a good PSNR mean the motion is right? | No. The deformation field gets 74% of the tangential motion on the sphere wrong (sliding on a uniformly coloured surface does not change the image). Spacetime Gaussians barely move at all; they appear and disappear |
+| [Regularization](#addition-a-lower-bound-on-the-temporal-width-and-velocity-regularization), 5–7 | Can a regularizer fix it? | Aligning neighbouring velocities reduces the sliding (0.74 → 0.49) for the deformation field. The same loss makes spacetime Gaussians worse: they all stop |
+| [Trajectory](#addition-the-trajectory-representation), 8–12 | Does a representation that tracks fixed Gaussians do better? | It collapses without regularization, and stays below the deformation field. It does keep track of an object that moves far |
+| [Tracking](#addition-error-free-2d-tracking-and-revisiting-time-ordered-training), 13–15 | How much would a perfect 2D point tracker help? | Little: sliding goes 0.74 → 0.51. Training in time order, as the original paper does, was the main reason the trajectory representation did badly (19.3 → 24.3 dB without it) |
+| [Antialiasing](#addition-antialiased-ground-truth-images), 16–17 | Do aliased ground-truth images change the conclusions? | PSNR rises by 2.6 dB; the motion accuracy does not change |
+
+The same deformation field on a standard benchmark (D-NeRF `jumpingjacks`, 34.7 dB) is in the
+[top-level README](../../README.md#d-nerf-jumpingjacks).
+
 ## Evaluation (`motion_eval.py`)
 
 The true displacement Φ of a point attached to an object is known (for the sphere, the change of centre and

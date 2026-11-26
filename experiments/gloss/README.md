@@ -3,6 +3,26 @@
 2026-11-17. Using unmodified 3DGS (the implementation in this repository, SH degree 3), I confirmed that reconstruction of strongly glossy surfaces breaks down.
 The test is controlled: everything except the material is kept the same.
 
+## Summary
+
+This page is long because it is a chain: each step answers one question, and its answer raises the next.
+The table is the whole story. Each row links to the section with the method, numbers, and limits.
+
+| Step | Question | Answer |
+|---|---|---|
+| [Main experiment](#results) | Does 3DGS break on a gold statue? | Yes. Gold is 16–17 dB below a diffuse statue of the same colour, and equally bad on the training views: a lack of capacity, not a failure to generalize |
+| [Follow-up 1](#follow-up-does-raising-the-sh-degree-fix-it-per-point-fits-without-3dgs) | Does a higher SH degree fix it? | No. Higher degrees memorize the training views, but test views stay at 24–27 dB. The ceiling is set by how coarsely each point is observed |
+| [Follow-up 2](#follow-up-2-can-sharing-the-lighting-between-points-get-past-the-ceiling) | Does sharing one lighting across all points get past the ceiling? | The lighting is recovered correctly, but on this statue it loses overall: 38% of reflections see the statue itself, and normals vary inside a pixel. It wins only where those are excluded (28.8 vs 27.9 dB) |
+| [Follow-up 3](#follow-up-3-does-normal-variation-within-a-pixel-act-as-roughness) | Is the roughness a method learns just the normal variation inside a pixel? | Not measurable on the statue (rank correlation 0.14), although the procedure can detect it (0.89 on synthetic data). Other errors bury it |
+| [Follow-up 4](#follow-up-4-check-the-conversion-from-variation-to-roughness-on-a-sphere-with-controlled-bumps) | Same question on a sphere with controlled bumps | Yes (rank correlation 0.90–0.93). With a correction for oblique views, roughness computed from geometry matches or beats roughness optimized per point, with no learned parameter |
+| [Follow-up 5](#follow-up-5-add-deferred-shading-to-3dgs-toy-and-use-normal-variation-as-roughness) | Does that work inside 3DGS with deferred shading? | Partly. The relative blur per region is learned correctly, but the Gaussians form a thick semi-transparent layer, so the cue changes in the wrong direction with pixel size, and vanilla 3DGS is not beaten |
+
+How to read the rest: every step has the same parts (Question, Method or Model, Results, Discussion,
+Limitations). The numbered items under each Discussion are the conclusions. Statements marked
+"(conjecture)" were not tested. Commands are in [Reproduction](#reproduction).
+
+![Zoom on the gold statue: ground truth, 3DGS, error](figures/zoom.png)
+
 ## Goal
 
 - Check whether 3DGS reconstruction breaks down on strongly glossy surfaces.
