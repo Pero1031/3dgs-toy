@@ -46,7 +46,9 @@ LUMA = torch.tensor([0.2126, 0.7152, 0.0722], dtype=torch.float64)
 
 # Figure colours (dataviz reference palette: categories 1, 2 and the text / surface colours)
 C_SERIES = {"gold": "#2a78d6", "matte": "#eb6834"}
-C_TEXT, C_TEXT2, C_GRID, C_SURF = "#0b0b0b", "#52514e", "#e4e3df", "#fcfcfb"
+# Text, ticks and axis lines are black. Grid lines are a clearly visible gray (pale gray is unreadable).
+# C_SHADE is only for shaded background regions.
+C_TEXT, C_GRID, C_SHADE, C_SURF = "#0b0b0b", "#b0b0b0", "#e4e3df", "#fcfcfb"
 LABEL = {"gold": "Gold", "matte": "Diffuse"}
 
 
@@ -159,8 +161,8 @@ def plot_curves(res, n_obs_median, path):
     import matplotlib.pyplot as plt
 
     plt.rcParams.update({"font.family": ["Yu Gothic", "Meiryo", "MS Gothic"], "font.size": 9,
-                         "axes.edgecolor": C_TEXT2, "axes.labelcolor": C_TEXT, "xtick.color": C_TEXT2,
-                         "ytick.color": C_TEXT2, "text.color": C_TEXT})
+                         "axes.edgecolor": C_TEXT, "axes.labelcolor": C_TEXT, "xtick.color": C_TEXT,
+                         "ytick.color": C_TEXT, "text.color": C_TEXT})
     fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.2), dpi=200, facecolor=C_SURF, sharey=True)
     degs = res["degrees"]
     L_over = math.sqrt(n_obs_median) - 1  # the degree at which the number of coefficients (L+1)^2 exceeds the median number of training observations per point
@@ -168,11 +170,11 @@ def plot_curves(res, n_obs_median, path):
               (f"(b) With smoothness penalty (s = {SMOOTH_FIG:g})", lambda r: r["smooth_check"][str(SMOOTH_FIG)])]
     for ax, (title, get) in zip(axes, panels):
         ax.set_facecolor(C_SURF)
-        ax.axvspan(L_over, degs[-1] + 0.5, color=C_GRID, alpha=0.55, lw=0)
+        ax.axvspan(L_over, degs[-1] + 0.5, color=C_SHADE, alpha=0.55, lw=0)
         ax.text(L_over + 0.15, 0.03, f"number of coefficients (L+1)² exceeds the median number\nof training observations per point ({n_obs_median:.0f})",
-                transform=ax.get_xaxis_transform(), fontsize=7, color=C_TEXT2, va="bottom")
-        ax.axvline(3, color=C_TEXT2, lw=0.8, ls=":")
-        ax.text(3.15, 0.97, "3DGS default (L=3)", transform=ax.get_xaxis_transform(), fontsize=7, color=C_TEXT2,
+                transform=ax.get_xaxis_transform(), fontsize=7, color=C_TEXT, va="bottom")
+        ax.axvline(3, color=C_TEXT, lw=0.8, ls=":")
+        ax.text(3.15, 0.97, "3DGS default (L=3)", transform=ax.get_xaxis_transform(), fontsize=7, color=C_TEXT,
                 va="top")
         ends = []
         for cond in res["conditions"]:

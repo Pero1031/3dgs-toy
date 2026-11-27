@@ -495,7 +495,7 @@ def plot_results(out, path):
         _axes_style(ax)
         rows = [R[k]["sectors"][name] for k in sc]
         design = rows[0]["design_blur_deg"]
-        ax.axhline(design, color=so.C_TEXT2, lw=1.0, ls=(0, (4, 3)),
+        ax.axhline(design, color=so.C_TEXT, lw=1.0, ls=(0, (4, 3)),
                    label="Conversion: sufficiently large footprint (2 × design tilt)" if j == 0 else None)
         for key, lab, col, mk, lw in series:
             if key == "fitted":
@@ -548,7 +548,7 @@ def plot_results(out, path):
     ax = fig.add_subplot(gs_[1, 4:])
     _axes_style(ax)
     top = 34
-    ax.plot([0, top], [0, top], color=so.C_TEXT2, lw=1.0, ls=(0, (4, 3)), label="y = x")
+    ax.plot([0, top], [0, top], color=so.C_TEXT, lw=1.0, ls=(0, (4, 3)), label="y = x")
     groups = [(["brdf3", "brdf6", "brdf12"], "fitted_all", C_CAT[4], "GGX sectors (smooth shape)"),
               (["bump3", "bump6", "bump12"], "fitted_geom", C_CAT[0], "Bump sectors")]
     for names, key, col, lab in groups:
@@ -567,7 +567,7 @@ def plot_results(out, path):
     ax.set_ylabel("Optimal per-point blur σ [degrees] (mean, the lines are 25–75%)", fontsize=8)
     ax.legend(loc="upper left", fontsize=7.2, frameon=False)
     ax.text(0.98, 0.03, "Marker shape is the pixel size (○ 512 / △ 256 / □ 128 px)", transform=ax.transAxes, ha="right",
-            fontsize=7, color=so.C_TEXT2)
+            fontsize=7, color=so.C_TEXT)
     ax.set_title("(e) Blur corresponding to the material roughness", fontsize=9, loc="left")
     fig.suptitle("Bumpy sphere: blur optimized per point, and the conversion from the normal variation within a pixel", fontsize=10.5, x=0.01,
                  y=0.995, ha="left")

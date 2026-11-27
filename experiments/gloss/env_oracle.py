@@ -232,7 +232,7 @@ def plot_bars(rows, path):
     import matplotlib.pyplot as plt
 
     plt.rcParams.update({"font.family": ["Yu Gothic", "Meiryo", "MS Gothic"], "font.size": 9,
-                         "axes.edgecolor": so.C_TEXT2, "xtick.color": so.C_TEXT2, "ytick.color": so.C_TEXT})
+                         "axes.edgecolor": so.C_TEXT, "xtick.color": so.C_TEXT, "ytick.color": so.C_TEXT})
     fig, ax = plt.subplots(figsize=(7.2, 0.62 * len(rows) + 1.0), dpi=200, facecolor=so.C_SURF)
     ax.set_facecolor(so.C_SURF)
     h = 0.36

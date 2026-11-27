@@ -340,8 +340,8 @@ def setup_plt():
     import matplotlib.pyplot as plt
 
     plt.rcParams.update({"font.family": ["Yu Gothic", "Meiryo", "MS Gothic"], "font.size": 9,
-                         "axes.edgecolor": so.C_TEXT2, "axes.labelcolor": so.C_TEXT, "xtick.color": so.C_TEXT2,
-                         "ytick.color": so.C_TEXT2, "text.color": so.C_TEXT})
+                         "axes.edgecolor": so.C_TEXT, "axes.labelcolor": so.C_TEXT, "xtick.color": so.C_TEXT,
+                         "ytick.color": so.C_TEXT, "text.color": so.C_TEXT})
     return plt
 
 
@@ -353,7 +353,7 @@ def scatter_panel(ax, meas_deg, fit_deg, title, ylabel="Optimal per-point blur w
     rng = np.random.default_rng(0)
     jit = rng.uniform(-0.35, 0.35, len(fit_deg))  # the vertical axis takes only grid values, so jitter a little to show overlaps
     ax.scatter(meas_deg, fit_deg + jit, s=5, color=so.C_SERIES["gold"], alpha=0.25, lw=0, label="Points (points where the roughness is determined by the observations)")
-    ax.plot([0, top], [0, top], color=so.C_TEXT2, lw=1.0, ls=(0, (4, 3)), label="y = x (as converted)")
+    ax.plot([0, top], [0, top], color=so.C_TEXT, lw=1.0, ls=(0, (4, 3)), label="y = x (as converted)")
     edges = np.quantile(meas_deg, np.linspace(0, 1, 9))
     xc, med, q1, q3 = [], [], [], []
     for a, b in zip(edges[:-1], edges[1:]):

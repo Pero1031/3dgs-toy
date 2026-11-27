@@ -235,9 +235,9 @@ def plot_summary(R, path):
         h = np.array(g["hist_opacity_weighted"])
         ax.step(np.r_[e[:-1], e[-1]], np.r_[h, h[-1]] / h.sum() / np.diff(e)[0], where="post", color=C_MODE[m], lw=1.4,
                 label=MODE_LABEL[m])
-    ax.axvspan(-1.3, 1.3, color=so.C_GRID, alpha=0.8, lw=0, zorder=0)
-    ax.axvline(0, color=so.C_TEXT2, lw=1.0, ls=(0, (4, 3)))
-    ax.text(1.6, ax.get_ylim()[1] * 0.92, "range of the bump\ndisplacement", fontsize=6.8, color=so.C_TEXT2, va="top")
+    ax.axvspan(-1.3, 1.3, color=so.C_SHADE, alpha=0.8, lw=0, zorder=0)
+    ax.axvline(0, color=so.C_TEXT, lw=1.0, ls=(0, (4, 3)))
+    ax.text(1.6, ax.get_ylim()[1] * 0.92, "range of the bump\ndisplacement", fontsize=6.8, color=so.C_TEXT, va="top")
     ax.set_xlabel("Offset from the reference sphere [mm] (negative is inside)", fontsize=8)
     ax.set_ylabel("Fraction [1/mm] (weighted by opacity)", fontsize=8)
     ax.legend(loc="upper left", fontsize=6.8, frameon=False)
@@ -313,7 +313,7 @@ def plot_maps(path):
                 v = np.degrees(x.cpu().numpy())
                 v = np.where(fg, v, np.nan)
                 im = ax.imshow(v[lo:hi, lo:hi], cmap=cmap, norm=norm, extent=(lo, hi, hi, lo), interpolation="nearest")
-            line = "#fcfcfb" if j < 3 else so.C_TEXT2
+            line = "#fcfcfb" if j < 3 else so.C_TEXT
             for kk, (sname, _, _) in enumerate(ms.SECTORS):
                 u, v_, cv = sr._meridian(c, frm[k], ms.SECTOR_DEG * kk, np.linspace(-62, 62, 80))
                 ax.plot(np.where(cv > 0.3, u, np.nan), np.where(cv > 0.3, v_, np.nan), color=line, lw=0.7,
@@ -330,7 +330,7 @@ def plot_maps(path):
                 ax.set_title(cols[j], fontsize=8.5, loc="left")
             if j == 0:
                 ax.text(-0.02, 0.5, f"Test view {k}\n{note}", transform=ax.transAxes, rotation=90, ha="right",
-                        va="center", fontsize=7.5, color=so.C_TEXT2)
+                        va="center", fontsize=7.5, color=so.C_TEXT)
     cax = fig.add_subplot(gs_[:, 5])
     cb = fig.colorbar(im, cax=cax)
     cb.set_label("Blur σ in the reflection direction [degrees]", fontsize=8)
