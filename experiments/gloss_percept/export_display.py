@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Display images of the truth and of 3DGS renders, for the gloss models of D:\\ML\\gloss-perception-lab (lab_cues.py).
+Display images of the truth and of 3DGS renders, for the gloss models of D:\\project\\gloss-perception-lab (lab_cues.py).
 
 Every image is shown as an SDR display would: linear luminance x EXPOSURE (one value for all conditions: same light,
 same camera), clipped at 1, sRGB curve. The object is composited onto a mid grey (0.5 in display values, the background

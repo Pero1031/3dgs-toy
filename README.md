@@ -13,6 +13,7 @@ tests the cause, and where possible tries a fix. Everything runs on one Quadro M
 | **4DGS, three representations** | Deformation field, spacetime Gaussians and per-time trajectories in one code base. D-NeRF `jumpingjacks`: 34.7 dB, SSIM 0.987 |
 | **Motion** | High PSNR with wrong motion: the deformation field slides along the surface (error 0.74 of the true displacement), and PSNR does not show it |
 | **Gloss** | SH cannot draw sharp, moving highlights: 3DGS keeps 11% of them. A CLIP perceptual loss only fools CLIP. A deferred-reflection model (3DGS-DR) brings back 91% |
+| **Gloss in motion** | A turning glossy object: the deformation field gets the normals wrong by 30°. Fixed sizes, flatness and local rigidity bring that to 7°. Yet the reflection model stays unused: the highlights are painted onto the surface |
 | **Colour** | On wide-gamut scenes, the clamp of colour at 0 costs exactly what clipping the truth costs (Δu'v' 0.022). PSNR does not show it |
 | **Translucency** | A relightable method (R3DG) relights wax as if it were opaque: 2–3× the true shading contrast |
 
@@ -51,6 +52,28 @@ psychophysics and with a linear readout of CLIP fitted to human gloss ratings (r
 ![Truth, vanilla 3DGS, 3DGS-DR](experiments/gloss_percept/results/png_blob1_r0.05.png)
 
 *Left to right: truth, vanilla 3DGS, 3DGS-DR.*
+
+### [Gloss in motion: a glossy object that turns under a fixed light](experiments/gloss_motion/README.md)
+
+A glossy object turns in front of a fixed environment, one view per time. Highlights must slide over the surface;
+highlights attached to it look matte in motion. Trained with a deformation field on a deferred-reflection model
+("4DGS-DR": 3DGS-DR with the deformation network of Deformable 3D Gaussians), and scored against the known rotation.
+
+- A smooth, uniform blob does not pin its own rotation: the positions turn by two thirds of the truth and the normals
+  stay almost fixed in the world. A textured Stanford bunny pins the positions (97%).
+- The normals stay wrong (30°) even then. The deformation changes the Gaussians' sizes, so the shortest axis, which
+  3DGS-DR uses as the normal, is a different axis at different times for 30% of the Gaussians.
+- Three changes taken from existing methods fix it: sizes constant over time, a flatness loss, and the local-rigidity
+  loss of Dynamic 3D Gaussians. Normal error 7°, no axis switches, PSNR unchanged (32.05), and the motion visibly
+  improves.
+- Splitting the render into its parts shows that the reflection component is empty in every dynamic run (at most 1% of
+  the highlights' brightness). The highlights are constant colour attached to the surface.
+- A visible-difference loss (the achromatic pathway of ColorVideoVDP, rewritten as a loss) orders blurred images
+  correctly but cannot change this: added to training it moved nothing on test views.
+
+![Truth, 4DGS-DR, 4DGS-DR with pinned motion and normals](experiments/gloss_motion/results/bunny_tex_r0.05.gif)
+
+*Fixed test view over time. Left to right: truth, 4DGS-DR as it was (30k iterations), with the changes (67k).*
 
 ### [Does 3DGS break on glossy surfaces?](experiments/gloss/README.md)
 

@@ -34,7 +34,7 @@ import torch.nn.functional as F
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[2]
-LAB = Path(r"D:\ML\gloss-perception-lab")
+LAB = Path(r"D:\project\gloss-perception-lab")
 SERRANO = LAB / "data" / "serrano"
 IN = ROOT / "data" / "gloss_percept" / "clip_input"
 CACHE = ROOT / "data" / "gloss_percept" / "clip"

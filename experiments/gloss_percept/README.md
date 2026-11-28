@@ -84,7 +84,7 @@ trusted only if it orders the truth's roughness ladder (matte < 0.5 < 0.3 < 0.15
 
 ### The gloss lab's cue model fails the ladder
 
-The best model of `D:\ML\gloss-perception-lab` under shape hold-out is a ridge on highlight cues and luminance
+The best model of `D:\project\gloss-perception-lab` under shape hold-out is a ridge on highlight cues and luminance
 quantiles ([`lab_cues.py`](lab_cues.py)). On the truth it predicts, on the 1–7 scale:
 
 | | matte | 0.5 | 0.3 | 0.15 | 0.05 |

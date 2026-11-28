@@ -1,0 +1,49 @@
+{
+ "model": "D:\\3dgsdr_work\\output\\gm_bunny_r0.05_tex_dr2",
+ "iteration": 67000,
+ "rows_of_frames_png": [
+  "truth",
+  "render",
+  "reflection",
+  "view_dep_colour",
+  "constant_colour"
+ ],
+ "test": {
+  "views": 30,
+  "jod": 7.742784066994985,
+  "l1": 0.023478228618856435,
+  "highlights": {
+   "truth": 0.7250063558419545,
+   "render": 0.6516726553440094,
+   "reflection": 0.006240378087386489,
+   "view_dep_colour": 0.027897046195964018,
+   "constant_colour": 0.6175352295239767
+  },
+  "rest_of_object": {
+   "truth": 0.3952818959951401,
+   "render": 0.3960223158200582,
+   "reflection": 0.008666247750322023,
+   "view_dep_colour": -0.012996282475069166,
+   "constant_colour": 0.4003523508707682
+  }
+ },
+ "train": {
+  "views": 30,
+  "jod": 8.211713993549347,
+  "l1": 0.018980572082292133,
+  "highlights": {
+   "truth": 0.6950443704922994,
+   "render": 0.6366061727205913,
+   "reflection": 0.02398992283269763,
+   "view_dep_colour": 0.03510199999436736,
+   "constant_colour": 0.5775142520666122
+  },
+  "rest_of_object": {
+   "truth": 0.36563691397507986,
+   "render": 0.36520418723424275,
+   "reflection": 0.007735625359540184,
+   "view_dep_colour": -0.008748230999723697,
+   "constant_colour": 0.36621678868929547
+  }
+ }
+}

@@ -1,0 +1,49 @@
+{
+ "model": "D:\\3dgsdr_work\\output\\gm_blob1_r0.05_dr",
+ "iteration": 61000,
+ "rows_of_frames_png": [
+  "truth",
+  "render",
+  "reflection",
+  "view_dep_colour",
+  "constant_colour"
+ ],
+ "test": {
+  "views": 30,
+  "jod": 6.55495613416036,
+  "l1": 0.02677263207361347,
+  "highlights": {
+   "truth": 0.6419264833132426,
+   "render": 0.5487939099470774,
+   "reflection": 0.00028829366880624244,
+   "view_dep_colour": 0.022535995300859212,
+   "constant_colour": 0.5259696205457052
+  },
+  "rest_of_object": {
+   "truth": 0.4113015900055567,
+   "render": 0.4134562154610952,
+   "reflection": 7.125452442172294e-05,
+   "view_dep_colour": -0.014768094290047884,
+   "constant_colour": 0.42815305590629577
+  }
+ },
+ "train": {
+  "views": 30,
+  "jod": 8.134437811374664,
+  "l1": 0.013340281998570524,
+  "highlights": {
+   "truth": 0.6443853298823039,
+   "render": 0.5940784374872844,
+   "reflection": 0.0003465475766764333,
+   "view_dep_colour": 0.053988916085412106,
+   "constant_colour": 0.5397429744402568
+  },
+  "rest_of_object": {
+   "truth": 0.40539647936820983,
+   "render": 0.4059643258651098,
+   "reflection": 0.00018357229722217502,
+   "view_dep_colour": -0.01404493124215757,
+   "constant_colour": 0.4198256850242615
+  }
+ }
+}

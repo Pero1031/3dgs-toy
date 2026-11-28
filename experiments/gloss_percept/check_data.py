@@ -32,12 +32,13 @@ def fireflies(Y, p999):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("datadir")
+    ap.add_argument("--pattern", default="view_*[0-9].pfm", help="raw renders to check (t_*[0-9].pfm for gloss_motion)")
     a = ap.parse_args()
     d = Path(a.datadir)
     import imageio.v2 as imageio
     thumbs = []
     for split in ("train", "test", "test_seed2"):
-        files = sorted((d / "raw" / split).glob("view_*[0-9].pfm"))
+        files = sorted((d / "raw" / split).glob(a.pattern))
         if not files:
             continue
         cov, mean, p999, ff, nonfin, neg = [], [], [], 0, 0, 0

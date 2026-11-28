@@ -1,0 +1,49 @@
+{
+ "model": "D:\\3dgsdr_work\\output\\gm_bunny_r0.05_tex_dr",
+ "iteration": 30000,
+ "rows_of_frames_png": [
+  "truth",
+  "render",
+  "reflection",
+  "view_dep_colour",
+  "constant_colour"
+ ],
+ "test": {
+  "views": 30,
+  "jod": 7.5632500092188515,
+  "l1": 0.024781857488388567,
+  "highlights": {
+   "truth": 0.7250063558419545,
+   "render": 0.6456018765767415,
+   "reflection": 2.0688022838536804e-06,
+   "view_dep_colour": 0.022441060344378153,
+   "constant_colour": 0.623158746957779
+  },
+  "rest_of_object": {
+   "truth": 0.3952818959951401,
+   "render": 0.39530852337678274,
+   "reflection": 4.194513735455985e-06,
+   "view_dep_colour": -0.009621522684271137,
+   "constant_colour": 0.404925857981046
+  }
+ },
+ "train": {
+  "views": 30,
+  "jod": 7.953269155820211,
+  "l1": 0.021125835169114305,
+  "highlights": {
+   "truth": 0.6950443704922994,
+   "render": 0.6260498404502869,
+   "reflection": 1.9152128913901834e-06,
+   "view_dep_colour": 0.029023244899387162,
+   "constant_colour": 0.5970246930917104
+  },
+  "rest_of_object": {
+   "truth": 0.36563691397507986,
+   "render": 0.36465719938278196,
+   "reflection": 6.2129993769607004e-06,
+   "view_dep_colour": -0.008926965253582846,
+   "constant_colour": 0.37357795238494873
+  }
+ }
+}

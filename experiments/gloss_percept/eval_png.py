@@ -72,15 +72,17 @@ def main():
     ap.add_argument("--ckpt", nargs="*", default=[], help="train.py checkpoints trained on the PNGs")
     ap.add_argument("--clip", action="store_true")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--png-root", default="data/gloss_percept_png", help="data/gloss_motion_png for the dynamic data")
+    ap.add_argument("--src-root", default="data/gloss_percept", help="data/gloss_motion for the dynamic data")
     a = ap.parse_args()
-    d = ROOT / "data" / "gloss_percept_png" / a.name
-    src = ROOT / "data" / "gloss_percept" / a.name
+    d = ROOT / a.png_root / a.name
+    src = ROOT / a.src_root / a.name
     names = [Path(f["file_path"]).name for f in json.loads((d / "transforms_test.json").read_text(encoding="utf-8"))["frames"]]
     cov = [np.clip(read_pfm(str(src / "raw" / "test" / f"{n}_mask.pfm"))[..., 0], 0, 1) for n in names]
     obj = [c > 0.99 for c in cov]
     imgs = {"truth": [load_png(d / "test" / f"{n}.png") for n in names],
             "noise (seed 2)": [load_png(d / "test_seed2" / f"{n}.png") for n in names]}
-    for s in a.dr:
+    for s in a.dr:   # any directory of renders named in the order of the test views (3DGS-DR, Deformable 3DGS, ...)
         lab, p = s.split("=", 1) if "=" in s else ("3DGS-DR " + Path(s).parents[2].name, s)
         files = sorted(Path(p).glob("*.png"))
         assert len(files) == len(names), f"{p}: {len(files)} renders for {len(names)} views"

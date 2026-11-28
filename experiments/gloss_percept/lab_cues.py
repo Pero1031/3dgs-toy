@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Predicted glossiness of the truth and of 3DGS renders, with the cue model of D:\\ML\\gloss-perception-lab.
+Predicted glossiness of the truth and of 3DGS renders, with the cue model of D:\\project\\gloss-perception-lab.
 
 Runs in the lab's environment (it imports the lab's code):
 
-    D:\\ML\\gloss-perception-lab\\.venv\\Scripts\\python.exe experiments/gloss_percept/lab_cues.py
+    D:\\project\\gloss-perception-lab\\.venv\\Scripts\\python.exe experiments/gloss_percept/lab_cues.py
 
 The model is the lab's best one under shape hold-out ("cues: trio + B", notes/handoff_stereo_highlight.md):
 highlight cues on the region where the senior's gloss map P exceeds the threshold of runs/highlight_cues/cues_all9_q95.json
@@ -24,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
-LAB = Path(r"D:\ML\gloss-perception-lab")
+LAB = Path(r"D:\project\gloss-perception-lab")
 sys.path.insert(0, str(LAB))
 import torch  # noqa: E402
 from PIL import Image  # noqa: E402

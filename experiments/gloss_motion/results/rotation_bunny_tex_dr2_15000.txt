@@ -1,0 +1,22 @@
+74811 Gaussians, 74598 with opacity > 0.0099; reference time 0.5
+    t  truth  positions  orientations  normal err vs pos.  vs truth   (degrees, turns about +y)
+ 0.00  -30.0      -26.7         -25.6                 3.9       5.1
+ 0.10  -24.0      -21.9         -21.3                 3.2       3.7
+ 0.20  -18.0      -16.3         -16.1                 2.4       2.7
+ 0.30  -12.0      -11.0         -11.0                 1.7       1.8
+ 0.40   -6.0       -5.5          -5.5                 1.0       1.1
+ 0.50    0.0        0.0           0.0                 0.0       0.0
+ 0.60    6.0        5.7           5.4                 1.0       1.1
+ 0.70   12.0       11.1          11.1                 1.8       1.9
+ 0.80   18.0       16.6          16.6                 2.5       2.7
+ 0.90   24.0       22.0          21.6                 3.2       3.6
+ 1.00   30.0       27.3          26.6                 3.9       4.6
+
+sizes fixed over time; shortest / middle size (median) 0.000 at t = 0.5, 0.000 at 0, 0.000 at 1; shortest axis differs from t = 0.5 for up to 0.0% (opacity-weighted)
+
+t = 1 (truth 30.0), Gaussians 0.1+ from the axis, by distance from the centroid:
+  r 0.100-0.153: position turn   24.8 (10-90%   20.2..  38.6), orientation turn   27.1  (n=12393)
+  r 0.153-0.183: position turn   34.7 (10-90%   22.7..  38.8), orientation turn   27.0  (n=12393)
+  r 0.183-0.220: position turn   33.9 (10-90%   22.5..  37.4), orientation turn   26.9  (n=12393)
+  r 0.220-0.253: position turn   32.1 (10-90%   23.4..  37.5), orientation turn   26.8  (n=7435)
+  r 0.253-2.230: position turn   31.6 (10-90%   23.9..  33.2), orientation turn   25.6  (n=4958)

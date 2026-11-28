@@ -10,7 +10,9 @@
     --trajectory each Gaussian has a position per time knot (with --knots-init 3, it trains while tracking in time order)
                  (gs/trajectory.py. A simplified version of Dynamic 3D Gaussians)
 
-Data is in D-NeRF format ("time" in each frame of transforms_*.json).
+Data is in D-NeRF format ("time" in each frame of transforms_*.json). Linear .pfm data (e.g. the rotating glossy objects
+of experiments/gloss_motion/make_motion.py) is trained with --color-mode as in train.py: the loss, PSNR and saved images
+use the encoding of gs/color.py, and --bg is given in the space of the Gaussians.
 
     python make_toy_dynamic.py
     python train_dynamic.py --datadir data/toy_dynamic --expname dyn_toy --iters 5000 --warm-up 1000
@@ -23,8 +25,8 @@ Data is in D-NeRF format ("time" in each frame of transforms_*.json).
     --warm-up  train without deformation for the first iterations, and start the MLP once a rough shape has formed
                (the paper uses 3000 / 40000)
 
-Outputs test images (top: ground truth / bottom: render), a GIF that sweeps time, log.csv, eval.json and
-a checkpoint to logs/<expname>/.
+Outputs test images (top: ground truth / bottom: render), a GIF that sweeps time, a GIF of the test views in time
+order (test_sequence.gif, truth | render), log.csv, eval.json and a checkpoint to logs/<expname>/.
 """
 
 import argparse
@@ -39,6 +41,7 @@ import numpy as np
 import torch
 
 from gs.camera import Camera
+from gs.color import MODES, ColorMode, data_color_space
 from gs.dataset import load_cameras
 from gs.deform import DeformNet
 from gs.gaussians import GaussianModel
@@ -58,7 +61,8 @@ def render_at(model, net, cam, t, bg, sh_degree, args):
         delta = model.delta_at(t)
     else:
         delta = None if net is None else net(model.params["means"].detach(), t)
-    out = render(model, cam, bg, sh_degree, tile=args.tile, max_entries=args.max_entries, delta=delta)
+    out = render(model, cam, bg, sh_degree, tile=args.tile, max_entries=args.max_entries, delta=delta,
+                 clamp_color=getattr(args, "clamp_color", True))
     out["delta"] = delta
     return out
 
@@ -140,7 +144,8 @@ def track_loss(model, net, out, cam, cam2, orbit, n=4096, tol=0.1):
 
 
 @torch.no_grad()
-def evaluate(model, net, cams, bg, sh_degree, args, save_path=None, n_show=4):
+def evaluate(model, net, cams, bg, sh_degree, args, save_path=None, n_show=4, view=lambda x: x):
+    """PSNR / SSIM on view(image) (cm.view: display values, or the same encoding of linear colour)"""
     ps, ss, times, shown = [], [], [], []
     show = set(np.linspace(0, len(cams) - 1, n_show).round().astype(int).tolist())
     for k, cam in enumerate(cams):
@@ -149,25 +154,37 @@ def evaluate(model, net, cams, bg, sh_degree, args, save_path=None, n_show=4):
         img = render_at(model, net, cam, cam.time, bg, sh_degree, args)["image"]
         torch.cuda.synchronize()
         times.append(time.perf_counter() - t0)
-        ps.append(psnr(img, cam.image).item())
-        ss.append(ssim(img, cam.image).item())
+        v, gt = view(img), view(cam.image)
+        ps.append(psnr(v, gt).item())
+        ss.append(ssim(v, gt).item())
         if k in show:
-            shown.append(torch.cat([cam.image, img.clamp(0, 1)], 0))
+            shown.append(torch.cat([gt, v.clamp(0, 1)], 0))
     if save_path is not None:
         imageio.imwrite(save_path, to_u8(torch.cat(shown, 1)))
     return float(np.mean(ps)), float(np.mean(ss)), float(np.median(times))
 
 
 @torch.no_grad()
-def time_sweep(model, net, ref_cam, radius, bg, sh_degree, args, path, n=40):
+def time_sweep(model, net, ref_cam, radius, bg, sh_degree, args, path, n=40, view=lambda x: x):
     """GIF that moves time 0 -> 1 while rotating the viewpoint little by little"""
     frames = []
     for k in range(n):
         c2w = look_at_origin(30.0 + 90.0 * k / (n - 1), 30.0, radius)
         cam = Camera.from_blender(c2w, ref_cam.W, ref_cam.H, ref_cam.fx)
         img = render_at(model, net, cam, k / (n - 1), bg, sh_degree, args)["image"]
-        frames.append(to_u8(img))
+        frames.append(to_u8(view(img)))
     imageio.mimsave(path, frames, duration=1000 / 20, loop=0)
+
+
+@torch.no_grad()
+def test_sequence(model, net, cams, bg, sh_degree, args, path, view=lambda x: x):
+    """GIF of the test views in time order, truth | render (for data whose test views are one fixed camera, such as
+    experiments/gloss_motion, this is the clip an observer would see)"""
+    frames = []
+    for cam in sorted(cams, key=lambda c: c.time):
+        img = render_at(model, net, cam, cam.time, bg, sh_degree, args)["image"]
+        frames.append(to_u8(torch.cat([view(cam.image), view(img)], 1)))
+    imageio.mimsave(path, frames, duration=1000 / 12, loop=0)
 
 
 def main():
@@ -177,6 +194,11 @@ def main():
     ap.add_argument("--iters", type=int, default=20000)
     ap.add_argument("--half-res", action="store_true")
     ap.add_argument("--black-bkgd", action="store_true")
+    ap.add_argument("--bg", type=float, nargs=3, default=None, metavar=("R", "G", "B"),
+                    help="background colour in the space of the Gaussians (overrides --black-bkgd)")
+    ap.add_argument("--color-mode", choices=MODES, default="display",
+                    help="what the colours of the Gaussians mean (gs/color.py; linear modes need linear .pfm data)")
+    ap.add_argument("--loss-knee", type=float, default=1.0, help="linear modes: knee of the loss encoding (gs/color.py)")
     ap.add_argument("--sh-degree", type=int, default=3)
     ap.add_argument("--init-points", type=int, default=20000)
     ap.add_argument("--init-extent", type=float, default=1.5, help="half side length of the cube in which the initial points are placed")
@@ -223,10 +245,12 @@ def main():
 
     torch.manual_seed(args.seed)
     dev = "cuda"
-    bg_rgb = [0.0] * 3 if args.black_bkgd else [1.0] * 3
-    train_cams = load_cameras(args.datadir, "train", args.half_res, bg_rgb, dev)
-    test_cams = load_cameras(args.datadir, "test", args.half_res, bg_rgb, dev)
-    val_cams = load_cameras(args.datadir, "val", args.half_res, bg_rgb, dev) or test_cams
+    bg_rgb = args.bg if args.bg else ([0.0] * 3 if args.black_bkgd else [1.0] * 3)
+    cm = ColorMode(args.color_mode, data_color_space(args.datadir), args.loss_knee)
+    args.clamp_color = cm.clamp
+    train_cams = load_cameras(args.datadir, "train", args.half_res, bg_rgb, dev, cm.image_fn)
+    test_cams = load_cameras(args.datadir, "test", args.half_res, bg_rgb, dev, cm.image_fn)
+    val_cams = load_cameras(args.datadir, "val", args.half_res, bg_rgb, dev, cm.image_fn) or test_cams
     assert all(c.time is not None for c in train_cams + test_cams), "each frame needs time (D-NeRF format)"
     bg = torch.tensor(bg_rgb, device=dev)
     extent = scene_extent(train_cams)
@@ -285,8 +309,9 @@ def main():
 
         out = render_at(model, net if deforming else None, cam, cam.time, bg, sh_degree, args)
         img = out["image"]
-        l1 = (img - cam.image).abs().mean()
-        loss = (1 - args.lambda_ssim) * l1 + args.lambda_ssim * (1 - ssim(img, cam.image))
+        img_l, gt_l = cm.loss_view(img), cm.loss_view(cam.image)
+        l1 = (img_l - gt_l).abs().mean()
+        loss = (1 - args.lambda_ssim) * l1 + args.lambda_ssim * (1 - ssim(img_l, gt_l))
         if args.lambda_smooth > 0 and out["delta"] is not None:
             loss = loss + args.lambda_smooth * velocity_smoothness(model, net, out, cam.time)
         if args.lambda_track > 0 and out["delta"] is not None:
@@ -317,11 +342,11 @@ def main():
                     model.reset_opacity()
 
             if it % args.i_print == 0:
-                train_psnr = psnr(img, cam.image).item()
+                train_psnr = psnr(cm.view(img), cm.view(cam.image)).item()
                 val_psnr = ""
                 if it % args.i_val == 0 or it == args.iters:
                     v = evaluate(model, net if deforming else None, val_cams, bg, sh_degree, args,
-                                 logdir / f"val_{it:06d}.png")
+                                 logdir / f"val_{it:06d}.png", view=cm.view)
                     val_psnr = f"{v[0]:.2f}"
                 el = time.time() - t_start
                 mem = torch.cuda.max_memory_allocated() / 2 ** 30
@@ -333,12 +358,13 @@ def main():
     log_f.close()
     train_min = (time.time() - t_start) / 60
     torch.save({"model": model.state_dict(), "deform": None if net is None else net.state_dict(),
-                "sh_degree": sh_degree, "bg": bg.cpu(), "args": vars(args),
+                "sh_degree": sh_degree, "bg": bg.cpu(), "args": vars(args), "data_space": cm.data_space,
                 "camera": {"W": W, "H": H, "focal": train_cams[0].fx}},
                logdir / f"ckpt_{args.iters:06d}.pt")
-    p, s, sec = evaluate(model, net, test_cams, bg, sh_degree, args, logdir / "test.png")
+    p, s, sec = evaluate(model, net, test_cams, bg, sh_degree, args, logdir / "test.png", view=cm.view)
     radius = float(torch.stack([c.center for c in train_cams]).norm(dim=1).mean())
-    time_sweep(model, net, test_cams[0], radius, bg, sh_degree, args, logdir / "time_sweep.gif")
+    time_sweep(model, net, test_cams[0], radius, bg, sh_degree, args, logdir / "time_sweep.gif", view=cm.view)
+    test_sequence(model, net, test_cams, bg, sh_degree, args, logdir / "test_sequence.gif", view=cm.view)
     res = {"test_psnr": p, "test_ssim": s, "render_ms": sec * 1000, "n_gauss": len(model),
            "train_min": train_min, "ms_per_iter": train_min * 60000 / args.iters}
     (logdir / "eval.json").write_text(json.dumps(res, indent=1), encoding="utf-8")

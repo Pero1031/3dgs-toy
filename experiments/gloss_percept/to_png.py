@@ -12,6 +12,13 @@ far larger than this object).
 
     python experiments/gloss_percept/to_png.py blob1__coat_r0.05
     -> data/gloss_percept_png/blob1__coat_r0.05/{train,test,test_seed2}/*.png, transforms_*.json, points3d.ply
+
+The dynamic data of experiments/gloss_motion (D-NeRF layout; "time" is kept in every frame):
+
+    python experiments/gloss_percept/to_png.py blob1__coat_r0.05__sweep60 --src-root data/gloss_motion --dst-root data/gloss_motion_png
+
+Raw renders of Blender (motion.json "renderer": "blender") hold the object alone, premultiplied by its coverage; the
+PNG holds straight colour, so they are divided by the coverage.
 """
 
 import argparse
@@ -54,10 +61,14 @@ def write_ply(path, xyz, rgb):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("name", help="data set under data/gloss_percept, e.g. blob1__coat_r0.05")
+    ap.add_argument("name", help="data set under --src-root, e.g. blob1__coat_r0.05")
+    ap.add_argument("--src-root", default="data/gloss_percept")
+    ap.add_argument("--dst-root", default="data/gloss_percept_png")
     a = ap.parse_args()
-    src = ROOT / "data" / "gloss_percept" / a.name
-    dst = ROOT / "data" / "gloss_percept_png" / a.name
+    src = ROOT / a.src_root / a.name
+    dst = ROOT / a.dst_root / a.name
+    motion = src / "motion.json"
+    premult = motion.exists() and json.loads(motion.read_text(encoding="utf-8")).get("renderer") == "blender"
     M = REC2020_TO_SRGB.double().numpy()
     clipped = []
     for split, meta_split in (("train", "train"), ("test", "test"), ("test_seed2", "test")):
@@ -71,17 +82,20 @@ def main():
             x = read_pfm(str(src / "raw" / split / f"{name}.pfm")).astype(np.float64) @ M.T
             m = np.clip(read_pfm(str(src / "raw" / split / f"{name}_mask.pfm"))[..., :1].astype(np.float64), 0, 1)
             x = np.where(np.isfinite(x), x, 0)
+            if premult:
+                x = np.where(m > 1e-3, x / np.maximum(m, 1e-3), 0)
             obj = m[..., 0] > 0.99
             clipped.append((x[obj].max(-1) * EXPOSURE >= 1).mean())
             rgba = np.concatenate([srgb(x * EXPOSURE), m], -1)
             imageio.imwrite(dst / split / f"{name}.png", np.round(rgba * 255).astype(np.uint8))
             frames.append({**f, "file_path": f"{split}/{name}"})
-        (dst / f"transforms_{split}.json").write_text(json.dumps({**meta, "frames": frames}, indent=1), encoding="utf-8")
+        (dst / f"transforms_{split}.json").write_text(json.dumps({**meta, "color_space": "display-srgb", "frames": frames}, indent=1), encoding="utf-8")
         print(f"{split}: {len(frames)} views")
     rng = np.random.default_rng(0)
     write_ply(dst / "points3d.ply", rng.uniform(-INIT_EXTENT, INIT_EXTENT, (INIT_POINTS, 3)).astype(np.float32),
               rng.integers(0, 2, (INIT_POINTS, 3)).astype(np.uint8))
-    print(f"share of object pixels clipped by the display: {np.mean(clipped):.3f} -> {dst}")
+    print(f"share of object pixels clipped by the display: {np.mean(clipped):.3f}"
+          f"{' (premultiplied raw renders divided by the coverage)' if premult else ''} -> {dst}")
 
 
 if __name__ == "__main__":
